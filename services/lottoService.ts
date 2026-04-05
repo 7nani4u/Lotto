@@ -495,18 +495,79 @@ function generateFallbackNumbers(): number[] {
 
 
 
-export function generateQuantumFlux(results: LottoResult[]): PredictionResult {
+export async function fetchGithubCombinations(): Promise<number[][]> {
+  try {
+    // raw.githubusercontent.com을 통해 파일 내용을 직접 가져옵니다.
+    // 만약 파일 이름이 lotto_combinations.txt 라면 해당 경로를 지정합니다.
+    const url = 'https://raw.githubusercontent.com/7nani4u/Lotto/main/lotto_combinations.txt';
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.warn('GitHub 저장소에서 텍스트 파일을 찾을 수 없거나 다운로드에 실패했습니다.');
+      return [];
+    }
+    
+    const text = await response.text();
+    const combinations: number[][] = [];
+    
+    // 줄 단위로 분리 (100만 줄 처리를 위한 최적화)
+    let startIndex = 0;
+    while (startIndex < text.length) {
+      let endIndex = text.indexOf('\n', startIndex);
+      if (endIndex === -1) endIndex = text.length;
+
+      const line = text.slice(startIndex, endIndex).trim();
+      startIndex = endIndex + 1;
+
+      if (!line) continue;
+
+      // 정규식 대신 split과 빠른 파싱 사용 (성능 향상)
+      const parts = line.split(/[,\s]+/);
+      const nums: number[] = [];
+      
+      for (const part of parts) {
+        if (!part) continue;
+        const n = parseInt(part, 10);
+        if (!isNaN(n) && n >= 1 && n <= 45) {
+          nums.push(n);
+        }
+      }
+        
+      if (nums.length === 6) {
+        combinations.push(nums.sort((a, b) => a - b));
+      }
+    }
+    
+    return combinations;
+  } catch (error) {
+    console.error('GitHub 텍스트 파일 파싱 중 오류:', error);
+    return [];
+  }
+}
+
+export function generateQuantumFlux(results: LottoResult[], githubCombinations: number[][] = []): PredictionResult {
   const stats = analyzeLotto(results);
   const prevResult = results[0];
   const oldResult = results[1];
   let maxAttempts = 1500;
 
+  // Github 텍스트 파일에서 유효한 조합이 있다면 랜덤하게 하나를 선택하여 베이스(Seed)로 활용
+  const hasGithubSeed = githubCombinations.length > 0;
+  const selectedGithubSeed = hasGithubSeed 
+    ? githubCombinations[Math.floor(Math.random() * githubCombinations.length)] 
+    : null;
+
   while (maxAttempts > 0) {
     const seededCandidates: number[] = [];
 
     for (let i = 0; i < 6; i++) {
-      const p1 = prevResult?.numbers[i] ?? Math.floor(Math.random() * 45) + 1;
-      const p2 = oldResult?.numbers[i] ?? Math.floor(Math.random() * 45) + 1;
+      let p1 = prevResult?.numbers[i] ?? Math.floor(Math.random() * 45) + 1;
+      let p2 = oldResult?.numbers[i] ?? Math.floor(Math.random() * 45) + 1;
+      
+      // Github 시드가 있으면 이전 회차 데이터 대신 시드 번호의 영향을 받도록 가중치 부여
+      if (selectedGithubSeed) {
+        p1 = selectedGithubSeed[i];
+      }
+
       const flux = Math.floor(Math.random() * 7);
       seededCandidates.push(((p1 + p2 + flux) % 45) + 1);
     }
@@ -521,11 +582,12 @@ export function generateQuantumFlux(results: LottoResult[]): PredictionResult {
     const numbers = generateUniqueNumbersFromCandidates(weightedPool);
 
     if (passesPythonFilters(numbers)) {
-      return buildPredictionResult(numbers, 93, [
+      const formulas = [
         '양자 요동 공식',
-        '최근 2회차 가중치 연산',
+        hasGithubSeed ? 'GitHub 저장소 로또 조합 반영' : '최근 2회차 가중치 연산',
         ...PYTHON_FILTER_FORMULAS,
-      ]);
+      ];
+      return buildPredictionResult(numbers, hasGithubSeed ? 96 : 93, formulas);
     }
 
     maxAttempts--;
