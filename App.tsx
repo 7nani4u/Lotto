@@ -303,12 +303,14 @@ const App: React.FC = () => {
                   <div className="text-xl font-black text-white">{draw.round}회차</div>
                   <div className="text-sm text-gray-400 mt-1">{draw.date}</div>
                 </div>
-                <div className="flex items-center gap-1 sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-2">
-                  {draw.numbers.map((num, i) => (
-                    <Ball key={i} num={num} onClick={() => handleBallClick(num)} />
-                  ))}
-                  <div className="text-gray-500 text-3xl mx-2 font-light">+</div>
-                  <Ball num={draw.bonus} isBonus onClick={() => handleBallClick(draw.bonus)} />
+                <div className="flex items-center gap-1 sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-1 sm:px-2 w-full overflow-hidden">
+                  <div className="flex items-center gap-1 sm:gap-2">
+                    {draw.numbers.map((num, i) => (
+                      <Ball key={i} num={num} small onClick={() => handleBallClick(num)} />
+                    ))}
+                  </div>
+                  <div className="text-gray-500 text-xl sm:text-3xl mx-1 sm:mx-2 font-light">+</div>
+                  <Ball num={draw.bonus} isBonus small onClick={() => handleBallClick(draw.bonus)} />
                 </div>
               </div>
             ))}
