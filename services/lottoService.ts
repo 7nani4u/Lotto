@@ -1,4 +1,4 @@
-import { LottoResult, PredictionResult, PatternPerformance } from '../types';
+import { LottoResult, PredictionResult } from '../types';
 
 // ==========================================
 // 1. DATA FETCHING (Korean 6/45 Lotto API)
@@ -157,6 +157,143 @@ export interface LottoStats {
   oddEvenAverage: string;
 }
 
+// ==========================================
+// 2.5 REPEAT ANALYSIS (반복 분석 고도화)
+// ==========================================
+export interface RepeatAnalysis {
+  targetNumber: number;
+  totalOccurrences: number;           // 전체 당첨 횟수
+  recent10Occurrences: number;        // 최근 10회차 내 당첨 횟수 (집중도 파악)
+  recent30Occurrences: number;        // 최근 30회차 내 당첨 횟수
+  repeatAfterOne: number;              // 1회차 후 연속 당첨 횟수
+  repeatAfterTwo: number;              // 2회차 후 당첨 횟수
+  repeatPercentage: number;            // 연속 당첨 확률
+  averageGap: number;                  // 평균 출현 간격
+  gapTrend: 'INCREASING' | 'DECREASING' | 'STABLE'; // 간격 추세 (주기성)
+  lastSeenRound: number;               // 마지막 출현 회차
+  roundsSinceLastSeen: number;         // 미출현 기간 (현재 회차 기준)
+  confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW';  // 신뢰도
+  insight: string;                     // 짧은 인사이트 코멘트 (예: "최근 급증", "장기 미출현")
+  recommendation: string;              // 상세 추천 텍스트
+}
+
+/**
+ * 특정 번호의 이월/연속 출현 확률 및 상세 패턴을 분석합니다.
+ */
+export function analyzeRepeatProbability(
+  results: LottoResult[],
+  targetNumber: number,
+  lookbackRounds: number = 100
+): RepeatAnalysis {
+  if (!results || results.length === 0) {
+    return {
+      targetNumber, totalOccurrences: 0, recent10Occurrences: 0, recent30Occurrences: 0,
+      repeatAfterOne: 0, repeatAfterTwo: 0, repeatPercentage: 0, averageGap: 0,
+      gapTrend: 'STABLE', lastSeenRound: 0, roundsSinceLastSeen: 0,
+      confidenceLevel: 'LOW', insight: '데이터 부족', recommendation: '데이터 부족'
+    };
+  }
+
+  const checkRounds = Math.min(lookbackRounds, results.length);
+  const latestRound = results[0].round;
+  
+  let totalOccurrences = 0;
+  let recent10Occurrences = 0;
+  let recent30Occurrences = 0;
+  let repeatAfterOne = 0;
+  let repeatAfterTwo = 0;
+  const gaps: number[] = [];
+  let lastSeenIdx = -1;
+
+  for (let i = 0; i < checkRounds; i++) {
+    const isDrawn = results[i].numbers.includes(targetNumber) || results[i].bonus === targetNumber;
+    
+    if (isDrawn) {
+      totalOccurrences++;
+      if (i < 10) recent10Occurrences++;
+      if (i < 30) recent30Occurrences++;
+      
+      if (lastSeenIdx !== -1) {
+        gaps.push(i - lastSeenIdx); // 과거로 갈수록 index가 커지므로 i - lastSeenIdx
+      }
+      lastSeenIdx = i;
+
+      // 연속 출현 확인 (i-1 은 i보다 더 최근 회차)
+      if (i > 0 && (results[i - 1].numbers.includes(targetNumber) || results[i - 1].bonus === targetNumber)) {
+        repeatAfterOne++;
+      }
+      if (i > 1 && (results[i - 2].numbers.includes(targetNumber) || results[i - 2].bonus === targetNumber)) {
+        repeatAfterTwo++;
+      }
+    }
+  }
+
+  const repeatPercentage = totalOccurrences > 0 
+    ? (repeatAfterOne / (totalOccurrences - 1)) * 100 
+    : 0;
+
+  const averageGap = gaps.length > 0 
+    ? gaps.reduce((a, b) => a + b, 0) / gaps.length 
+    : 0;
+
+  // 출현 간격 추세 (최근 3개 간격 평균 vs 전체 간격 평균)
+  let gapTrend: 'INCREASING' | 'DECREASING' | 'STABLE' = 'STABLE';
+  if (gaps.length >= 3) {
+    const recentGaps = gaps.slice(0, 3);
+    const recentAvg = recentGaps.reduce((a, b) => a + b, 0) / recentGaps.length;
+    if (recentAvg < averageGap * 0.7) gapTrend = 'DECREASING'; // 출현 간격 짧아짐 (자주 나옴)
+    else if (recentAvg > averageGap * 1.3) gapTrend = 'INCREASING'; // 출현 간격 길어짐
+  }
+
+  const lastSeenRoundMatch = results.find(r => r.numbers.includes(targetNumber) || r.bonus === targetNumber);
+  const lastSeenRound = lastSeenRoundMatch ? lastSeenRoundMatch.round : 0;
+  const roundsSinceLastSeen = lastSeenRoundMatch ? latestRound - lastSeenRound : checkRounds;
+
+  let confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
+  let insight = '';
+  let recommendation = '';
+
+  // 인사이트 도출 로직
+  if (roundsSinceLastSeen > 15) {
+    insight = '장기 미출현 번호';
+    confidenceLevel = 'HIGH'; // 반등 가능성
+    recommendation = `현재 ${roundsSinceLastSeen}회차 연속 미출현 상태로, 통계적 회귀에 의해 조만간 출현할 확률이 매우 높습니다.`;
+  } else if (recent10Occurrences >= 3) {
+    insight = '최근 급증 번호';
+    confidenceLevel = 'HIGH';
+    recommendation = `최근 10회차 동안 ${recent10Occurrences}회나 집중적으로 출현하는 강한 상승세를 보이고 있습니다.`;
+  } else if (repeatPercentage > 15) {
+    insight = '강한 연속성 보유';
+    confidenceLevel = 'MEDIUM';
+    recommendation = `이월(연속) 출현 확률이 ${repeatPercentage.toFixed(1)}%로 높은 편입니다. 직전 회차에 나왔다면 이월을 노려볼 만합니다.`;
+  } else if (gapTrend === 'DECREASING') {
+    insight = '출현 주기 단축 중';
+    confidenceLevel = 'MEDIUM';
+    recommendation = `평균 출현 간격(${averageGap.toFixed(1)}회)보다 최근 출현 주기가 짧아지며 상승 곡선을 타고 있습니다.`;
+  } else {
+    insight = '평범한 출현 흐름';
+    confidenceLevel = 'LOW';
+    recommendation = `특이한 쏠림이나 급증 패턴 없이 평균적인 흐름(${averageGap.toFixed(1)}회 간격)을 유지하고 있습니다.`;
+  }
+
+  if (totalOccurrences === 0) {
+    insight = '완전 미출현';
+    recommendation = `최근 ${checkRounds}회차 동안 단 한 번도 출현하지 않은 극단적 콜드 번호입니다.`;
+  }
+
+  return {
+    targetNumber, totalOccurrences, recent10Occurrences, recent30Occurrences,
+    repeatAfterOne, repeatAfterTwo, repeatPercentage, averageGap, gapTrend,
+    lastSeenRound, roundsSinceLastSeen, confidenceLevel, insight, recommendation
+  };
+}
+
+// ==========================================
+// 2.6 QUANTUM FLUX ENGINE (양자 분석 엔진)
+// ==========================================
+// Moved to the bottom to incorporate advanced Python filters.
+
+
 export function analyzeLotto(results: LottoResult[]): LottoStats {
   const frequencies: Record<number, number> = {};
   for (let i = 1; i <= 45; i++) frequencies[i] = 0;
@@ -279,120 +416,127 @@ export function isValidConsecutive(numbers: number[]): boolean {
 // ==========================================
 // 4. PREDICTION ENGINE (AI Master)
 // ==========================================
-type PredictionMode = 'BALANCED' | 'HOT' | 'COLD' | 'AI_HYBRID' | 'ADVANCED_FILTER';
+const ADVANCED_SUM_MIN = 85;
+const ADVANCED_SUM_MAX = 189;
 
-export function generatePrediction(results: LottoResult[], mode: PredictionMode = 'AI_HYBRID'): PredictionResult {
-  const stats = analyzeLotto(results);
-  let finalNumbers: number[] = [];
-  const formulasUsed: string[] = [];
-  let confidence = 0;
+const PYTHON_FILTER_FORMULAS = [
+  'AC산술복잡도',
+  '합46(Sum46)',
+  '상/하위 비율',
+  '연속번호 제한',
+  `총합(${ADVANCED_SUM_MIN}~${ADVANCED_SUM_MAX})`,
+  '번대별 분산',
+];
 
-  // 반복문을 통해 유효한 조합을 찾을 때까지 생성 (최대 1000번 시도)
-  let maxAttempts = 1000;
-  
-  while (maxAttempts > 0) {
-    let predicted: Set<number> = new Set();
-    
-    while (predicted.size < 6) {
-      let candidates: number[] = [];
+function buildPredictionResult(numbers: number[], confidence: number, formulasUsed: string[]): PredictionResult {
+  const sum = numbers.reduce((a, b) => a + b, 0);
+  let odd = 0;
+  let even = 0;
+  let high = 0;
+  let low = 0;
 
-      if (mode === 'BALANCED') {
-        // Mix of hot (2), cold (2), random (2)
-        if (predicted.size < 2) candidates = stats.hotNumbers;
-        else if (predicted.size < 4) candidates = stats.coldNumbers;
-        else candidates = Array.from({length: 45}, (_, i) => i + 1);
-        confidence = 75;
-      } else if (mode === 'HOT') {
-        candidates = stats.hotNumbers;
-        confidence = 80;
-      } else if (mode === 'COLD') {
-        candidates = stats.coldNumbers;
-        confidence = 65;
-      } else if (mode === 'AI_HYBRID') {
-        // Weighting system
-        const scores = Array(46).fill(0);
-        stats.hotNumbers.forEach(n => scores[n] += 5);
-        stats.coldNumbers.forEach(n => scores[n] += 10);
-        for (let i = 1; i <= 45; i++) {
-          if (!stats.recentNumbers.has(i)) scores[i] += 8;
-        }
-        candidates = Array.from({length: 45}, (_, i) => i + 1)
-          .sort((a, b) => (scores[b] + Math.random()*5) - (scores[a] + Math.random()*5));
-        confidence = 88;
-      } else {
-        // ADVANCED_FILTER (Python Script Logic)
-        candidates = Array.from({length: 45}, (_, i) => i + 1)
-          .sort(() => Math.random() - 0.5);
-        confidence = 95;
-      }
-
-      for (const c of candidates) {
-        if (!predicted.has(c)) {
-          predicted.add(c);
-          break;
-        }
-      }
-    }
-
-    const currentCombo = Array.from(predicted).sort((a, b) => a - b);
-
-    // ADVANCED_FILTER 모드일 경우 생성된 조합이 필터 파이프라인을 통과하는지 확인
-    if (mode === 'ADVANCED_FILTER' || mode === 'AI_HYBRID') {
-      const sum = currentCombo.reduce((a, b) => a + b, 0);
-      const isSumValid = sum >= 100 && sum <= 175;
-
-      if (
-        isSumValid &&
-        isValidAC(currentCombo) &&
-        isValidSum46(currentCombo) &&
-        isValidRatio(currentCombo) &&
-        isValidRangePattern(currentCombo) &&
-        isValidConsecutive(currentCombo)
-      ) {
-        finalNumbers = currentCombo;
-        if (mode === 'ADVANCED_FILTER') {
-          formulasUsed.push('AC산술복잡도', '합46(Sum46)', '상/하위 비율', '연속번호 제한', '총합(100~175)', '번대별 분산');
-        } else {
-          formulasUsed.push('AI 앙상블 분석', '패턴 매칭', '마르코프 체인 가중치', '파이썬 고급 필터링');
-        }
-        break; // 통과했으므로 탈출
-      }
-    } else {
-      // 다른 모드는 필터링 없이 바로 사용
-      finalNumbers = currentCombo;
-      if (mode === 'BALANCED') formulasUsed.push('균형 분석 (Hot+Cold)');
-      if (mode === 'HOT') formulasUsed.push('다출현 번호 우선');
-      if (mode === 'COLD') formulasUsed.push('미출현 번호 역상적용');
-      break;
-    }
-
-    maxAttempts--;
-  }
-
-  // 만약 필터를 통과하지 못해 루프가 끝났다면 마지막 조합을 그냥 사용
-  if (finalNumbers.length === 0) {
-    finalNumbers = Array.from(new Set(Array.from({length: 6}, () => Math.floor(Math.random() * 45) + 1))).sort((a, b) => a - b);
-    formulasUsed.push('기본 무작위 (필터 조건 미달)');
-  }
-  
-  // Calculate stats of this prediction
-  const sum = finalNumbers.reduce((a, b) => a + b, 0);
-  let odd = 0, even = 0, high = 0, low = 0;
-  finalNumbers.forEach(n => {
-    if (n % 2 !== 0) odd++; else even++;
-    if (n > 22) high++; else low++;
+  numbers.forEach((n) => {
+    if (n % 2 !== 0) odd++;
+    else even++;
+    if (n > 22) high++;
+    else low++;
   });
 
   return {
-    numbers: finalNumbers,
+    numbers,
     confidence,
     formulasUsed: Array.from(new Set(formulasUsed)),
     stats: {
       sum,
       oddEvenRatio: `${odd}:${even}`,
-      highLowRatio: `${high}:${low}`
-    }
+      highLowRatio: `${high}:${low}`,
+    },
   };
+}
+
+function generateUniqueNumbersFromCandidates(candidates: number[], targetCount: number = 6): number[] {
+  const selected = new Set<number>();
+
+  for (const candidate of candidates) {
+    if (candidate >= 1 && candidate <= 45) {
+      selected.add(candidate);
+    }
+    if (selected.size === targetCount) break;
+  }
+
+  while (selected.size < targetCount) {
+    selected.add(Math.floor(Math.random() * 45) + 1);
+  }
+
+  return Array.from(selected).sort((a, b) => a - b);
+}
+
+function passesPythonFilters(numbers: number[]): boolean {
+  const sum = numbers.reduce((a, b) => a + b, 0);
+
+  return (
+    sum >= ADVANCED_SUM_MIN &&
+    sum <= ADVANCED_SUM_MAX &&
+    isValidAC(numbers) &&
+    isValidSum46(numbers) &&
+    isValidRatio(numbers) &&
+    isValidRangePattern(numbers) &&
+    isValidConsecutive(numbers)
+  );
+}
+
+function generateFallbackNumbers(): number[] {
+  const selected = new Set<number>();
+  while (selected.size < 6) {
+    selected.add(Math.floor(Math.random() * 45) + 1);
+  }
+  return Array.from(selected).sort((a, b) => a - b);
+}
+
+
+
+export function generateQuantumFlux(results: LottoResult[]): PredictionResult {
+  const stats = analyzeLotto(results);
+  const prevResult = results[0];
+  const oldResult = results[1];
+  let maxAttempts = 1500;
+
+  while (maxAttempts > 0) {
+    const seededCandidates: number[] = [];
+
+    for (let i = 0; i < 6; i++) {
+      const p1 = prevResult?.numbers[i] ?? Math.floor(Math.random() * 45) + 1;
+      const p2 = oldResult?.numbers[i] ?? Math.floor(Math.random() * 45) + 1;
+      const flux = Math.floor(Math.random() * 7);
+      seededCandidates.push(((p1 + p2 + flux) % 45) + 1);
+    }
+
+    const weightedPool = [
+      ...seededCandidates,
+      ...stats.hotNumbers.slice(0, 6),
+      ...stats.coldNumbers.slice(0, 6),
+      ...Array.from({ length: 45 }, (_, i) => i + 1).sort(() => Math.random() - 0.5),
+    ];
+
+    const numbers = generateUniqueNumbersFromCandidates(weightedPool);
+
+    if (passesPythonFilters(numbers)) {
+      return buildPredictionResult(numbers, 93, [
+        '양자 요동 공식',
+        '최근 2회차 가중치 연산',
+        ...PYTHON_FILTER_FORMULAS,
+      ]);
+    }
+
+    maxAttempts--;
+  }
+
+  const fallback = generateFallbackNumbers();
+  return buildPredictionResult(fallback, 50, [
+    '양자 요동 공식',
+    ...PYTHON_FILTER_FORMULAS,
+    '기본 무작위 대체',
+  ]);
 }
 
 export function calculateBallColor(num: number): string {
