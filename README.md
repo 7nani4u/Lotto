@@ -1,19 +1,62 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# 한국 로또 6/45 AI 마스터 (Korean Lotto AI Master)
 
-# Run and deploy your AI Studio app
+본 프로젝트는 동행복권 API를 활용하여 실제 한국 6/45 로또 당첨 이력을 수집하고, 통계 분석 및 파이썬 기반의 고급 필터링 알고리즘을 적용하여 최적의 로또 번호를 추천해주는 AI 기반 웹 애플리케이션입니다.
 
-This contains everything you need to run your app locally.
+기존 라오스 복권(Lao Lotto) 예측 시스템을 전면 개편하여 **한국 로또 6/45 시스템**에 맞게 재탄생했습니다.
 
-View your app in AI Studio: https://ai.studio/apps/drive/1HVSEgUQ0zCgHrWE_ykxawhaBu2ZWPirb
+## 주요 기능 (Features)
 
-## Run Locally
+1. **실시간 당첨 데이터 동기화**
+   - 동행복권 공식 API(`selectPstLt645Info.do`)를 통해 262회차부터 최신 회차까지의 당첨 내역을 자동으로 수집합니다.
+   - 브라우저의 `localStorage`를 활용한 캐싱 시스템으로, 최초 1회 수집 이후에는 누락된 최신 데이터만 빠르게 업데이트하여 불필요한 API 호출을 방지합니다.
+   - 데이터 동기화 시 직관적인 프로그래스 바(Progress Bar)를 통해 진행 상황을 시각적으로 제공합니다.
 
-**Prerequisites:**  Node.js
+2. **파이썬 기반 고급 필터링 (Advanced Filtering)**
+   기존 복잡한 파이썬 필터링 스크립트를 TypeScript로 포팅하여 브라우저에서 실시간으로 동작하도록 구현했습니다.
+   - **AC Value (산술복잡도):** 6개 번호 간의 차이 고유값을 계산하여 지나치게 규칙적인 패턴(예: 2,4,6,8,10,12)을 차단합니다.
+   - **Sum46 (합46):** 두 수의 합이 46이 되는 쌍의 개수를 통계적으로 가장 많이 출현하는 0~2개로 제한합니다.
+   - **Ratio (상/하위 분할 비율):** 큰 번호 3개의 합을 작은 번호 3개의 합으로 나눈 비율이 `1.5 ~ 4.5` 사이에 오도록 조절하여 한쪽 쏠림을 방지합니다.
+   - **Range Pattern (번대별 분산):** 단번대, 10번대 등 특정 구간에 번호가 4개 이상 몰리지 않도록 제한합니다.
+   - **Consecutive (연속 번호 제한):** 3연속 번호를 원천 차단하고, 2연속 번호도 최대 2쌍까지만 허용합니다.
+   - **Total Sum (총합):** 6개 번호의 총합이 확률적으로 가장 높은 `100 ~ 175` 사이에 위치하도록 합니다.
 
+3. **다양한 예측 모드 지원**
+   - `파이썬 필터`: 6가지 고급 필터링 파이프라인을 100% 통과한 안정적인 조합 추천 (권장)
+   - `AI 앙상블`: 다출현(Hot), 미출현(Cold), 최근 미출현 데이터에 가중치를 부여하여 조합
+   - `균형형`: Hot, Cold 번호를 균형있게 섞어서 조합
+   - `다출현형` / `미출현형`: 각각 자주 나온 번호, 안 나온 번호 위주로 조합
 
-1. Install dependencies:
-   `npm install`
-2. Run the app:
-   `npm run dev`
+4. **통계 및 시각화**
+   - 역대 가장 많이 나온 번호 Top 15를 Recharts 라이브러리를 활용한 바 차트(Bar Chart)로 시각화
+   - 1~45번까지 번호 대역별로 한국 로또의 상징적인 색상(노랑, 파랑, 빨강, 회색, 초록)을 적용한 직관적인 UI 제공
+   - 평균 총합, 홀짝 비율 등 종합 통계 요약 제공
+
+## 실행 방법 (Run Locally)
+
+**사전 요구사항 (Prerequisites):** [Node.js](https://nodejs.org/) 설치
+
+1. **패키지 설치**
+   프로젝트 루트 디렉토리에서 터미널을 열고 아래 명령어를 실행하여 의존성을 설치합니다.
+   ```bash
+   npm install
+   ```
+
+2. **개발 서버 실행**
+   아래 명령어를 통해 로컬 개발 서버를 실행합니다.
+   ```bash
+   npm run dev
+   ```
+
+3. **브라우저 접속**
+   터미널에 출력된 로컬 주소 (예: `http://localhost:5173/`)로 접속하여 애플리케이션을 사용합니다.
+
+## 기술 스택 (Tech Stack)
+
+- **Frontend Framework:** React 19, TypeScript, Vite
+- **Styling:** Tailwind CSS (v4)
+- **Data Visualization:** Recharts
+- **Data Storage:** Browser `localStorage` (Client-side Caching)
+- **API:** 동행복권 오픈 API
+
+## 주의사항 (Disclaimer)
+이 프로그램은 통계적 확률과 과거 데이터를 기반으로 로또 번호를 필터링하고 추천하는 알고리즘 테스트 도구입니다. **로또 당첨을 100% 보장하지 않으며, 구매에 따른 모든 책임은 사용자 본인에게 있습니다.** 가벼운 참고용 및 재미로만 사용하시기 바랍니다.
