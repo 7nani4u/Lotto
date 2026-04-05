@@ -17,13 +17,13 @@ const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; sma
   onClick,
   small,
 }) => {
-  const sizeClass = small ? 'w-8 h-8 text-xs sm:text-sm' : 'w-9 h-9 sm:w-10 sm:h-10 md:w-12 md:h-12 text-base sm:text-lg md:text-xl flex-shrink-0';
+  const sizeClass = small ? 'w-8 h-8 text-xs sm:text-sm' : 'w-9 h-9 sm:w-10 sm:h-10 md:w-12 md:h-12 text-[15px] sm:text-lg md:text-xl flex-shrink-0';
 
   return (
     <div
       onClick={onClick}
       className={`${sizeClass} rounded-full flex items-center justify-center font-bold shadow-lg ${
-        isBonus ? 'border-4 border-dashed border-gray-300 ' : ''
+        isBonus ? 'border-[3px] border-dashed border-gray-300 ' : ''
       }${onClick ? 'cursor-pointer hover:scale-110 transition-transform ' : ''}${calculateBallColor(num)}`}
     >
       {num}
@@ -131,17 +131,17 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8">
       <div className="max-w-4xl mx-auto space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 break-keep">
             한국 로또 6/45 AI 마스터
           </h1>
-          <p className="text-gray-400 text-lg">인공지능과 통계 기반의 번호 예측 시스템</p>
+          <p className="text-gray-400 text-sm sm:text-base md:text-lg break-keep">인공지능과 통계 기반의 번호 예측 시스템</p>
         </div>
 
         <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-2xl border border-purple-900/50 flex flex-col items-center text-center">
-          <h2 className="text-3xl font-extrabold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-400 border-b border-gray-700 pb-4 w-full flex items-center justify-center gap-3">
+          <h2 className="text-2xl sm:text-3xl font-extrabold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-400 border-b border-gray-700 pb-4 w-full flex items-center justify-center gap-2 sm:gap-3 break-keep">
             <span>🌌</span> 양자 변동 번호 추천
           </h2>
-          <p className="text-gray-400 text-sm mb-8 max-w-2xl">
+          <p className="text-gray-400 text-xs sm:text-sm mb-8 max-w-2xl break-keep">
             최근 2회차 당첨 번호의 흐름과 양자 요동값을 결합한 뒤, 파이썬 필터(AC산술복잡도, 합46, 총합 85~189 등)의 고급 조건까지 함께 통과한 최적의 조합만 추출합니다.
           </p>
 
@@ -164,9 +164,9 @@ const App: React.FC = () => {
 
           <button
             onClick={handleGenerateQuantum}
-            className="w-full md:w-2/3 px-8 py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-2xl font-black text-2xl shadow-[0_0_20px_rgba(147,51,234,0.4)] transition-all transform hover:scale-[1.02] active:scale-95 mb-8 flex items-center justify-center gap-3"
+            className="w-full md:w-2/3 px-4 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-2xl font-black text-xl sm:text-2xl shadow-[0_0_20px_rgba(147,51,234,0.4)] transition-all transform hover:scale-[1.02] active:scale-95 mb-8 flex items-center justify-center gap-2 sm:gap-3 break-keep"
           >
-            <span>🚀</span> 양자 변동 번호 추출
+            <span>🚀</span> <span className="whitespace-nowrap">양자 변동 번호 추출</span>
           </button>
 
           {quantumPredictions.length > 0 && (
@@ -286,8 +286,11 @@ const App: React.FC = () => {
         <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-gray-700 mt-8">
           <div className="flex flex-col md:flex-row items-center justify-between border-b border-gray-700 pb-4 mb-6">
             <h2 className="text-2xl font-bold text-blue-300">최근 당첨 번호</h2>
-            <div className="text-sm text-yellow-400 bg-yellow-400/10 px-3 py-1.5 rounded-full mt-3 md:mt-0 flex items-center gap-2 animate-pulse">
-              <span>💡</span> 공을 클릭하면 해당 번호의 <strong>정밀 분석 리포트</strong>를 볼 수 있습니다.
+            <div className="text-xs sm:text-sm text-yellow-400 bg-yellow-400/10 px-3 py-2 rounded-xl mt-3 md:mt-0 flex items-center justify-center gap-2 animate-pulse text-center break-keep">
+              <span>💡</span>
+              <span>
+                공을 클릭하면 해당 번호의 <strong className="whitespace-nowrap">정밀 분석 리포트</strong>를 볼 수 있습니다.
+              </span>
             </div>
           </div>
           <div className="space-y-4">
@@ -300,7 +303,7 @@ const App: React.FC = () => {
                   <div className="text-xl font-black text-white">{draw.round}회차</div>
                   <div className="text-sm text-gray-400 mt-1">{draw.date}</div>
                 </div>
-                <div className="flex items-center gap-1 sm:gap-2 flex-nowrap justify-center">
+                <div className="flex items-center gap-1 sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-2">
                   {draw.numbers.map((num, i) => (
                     <Ball key={i} num={num} onClick={() => handleBallClick(num)} />
                   ))}
@@ -314,9 +317,9 @@ const App: React.FC = () => {
 
         {selectedAnalysisNum && repeatAnalysis && (
           <div ref={analysisReportRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/50 mt-8">
-            <h2 className="text-2xl font-bold mb-6 text-blue-300 flex items-center gap-3 border-b border-gray-700 pb-4">
+            <h2 className="text-xl sm:text-2xl font-bold mb-6 text-blue-300 flex items-center justify-center md:justify-start gap-2 sm:gap-3 border-b border-gray-700 pb-4 break-keep">
               <Ball num={selectedAnalysisNum} small />
-              <span>선택 번호 정밀 분석 리포트</span>
+              <span className="whitespace-nowrap">선택 번호 정밀 분석 리포트</span>
             </h2>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
