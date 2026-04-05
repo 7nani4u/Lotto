@@ -19,17 +19,17 @@ const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; sma
   responsive,
 }) => {
   let sizeClass = small ? 'w-8 h-8 text-xs sm:text-sm' : 'w-9 h-9 sm:w-10 sm:h-10 md:w-12 md:h-12 text-[15px] sm:text-lg md:text-xl flex-shrink-0';
-  
+  let borderClass = isBonus ? 'border-[3px] border-dashed border-gray-300 ' : '';
+
   if (responsive) {
-    sizeClass = 'w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 text-xs sm:text-base md:text-xl flex-shrink-0';
+    sizeClass = 'w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-12 md:h-12 text-[11px] sm:text-sm md:text-xl flex-shrink-0';
+    borderClass = isBonus ? 'border-2 sm:border-[3px] border-dashed border-gray-300 ' : '';
   }
 
   return (
     <div
       onClick={onClick}
-      className={`${sizeClass} rounded-full flex items-center justify-center font-bold shadow-lg ${
-        isBonus ? 'border-[3px] border-dashed border-gray-300 ' : ''
-      }${onClick ? 'cursor-pointer hover:scale-110 transition-transform ' : ''}${calculateBallColor(num)}`}
+      className={`${sizeClass} rounded-full flex items-center justify-center font-bold shadow-lg ${borderClass}${onClick ? 'cursor-pointer hover:scale-110 transition-transform ' : ''}${calculateBallColor(num)}`}
     >
       {num}
     </div>
@@ -302,19 +302,19 @@ const App: React.FC = () => {
             {allData.slice(0, 10).map((draw, idx) => (
               <div
                 key={idx}
-                className="flex flex-col md:flex-row items-center justify-between bg-gray-900 p-5 rounded-xl border border-gray-700 hover:border-gray-500 transition-colors"
+                className="flex flex-col md:flex-row items-center justify-between bg-gray-900 p-4 sm:p-5 rounded-xl border border-gray-700 hover:border-gray-500 transition-colors"
               >
                 <div className="text-center md:text-left mb-4 md:mb-0 w-32 flex-shrink-0">
                   <div className="text-xl font-black text-white">{draw.round}회차</div>
                   <div className="text-sm text-gray-400 mt-1">{draw.date}</div>
                 </div>
-                <div className="flex items-center gap-1 sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-1 sm:px-2 w-full overflow-hidden">
-                  <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+                <div className="flex items-center gap-[3px] sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-0 sm:px-2 w-full max-w-full">
+                  <div className="flex items-center gap-[3px] sm:gap-2 flex-shrink-0">
                     {draw.numbers.map((num, i) => (
                       <Ball key={i} num={num} responsive onClick={() => handleBallClick(num)} />
                     ))}
                   </div>
-                  <div className="text-gray-500 text-lg sm:text-2xl md:text-3xl mx-1 sm:mx-2 font-light flex-shrink-0">+</div>
+                  <div className="text-gray-500 text-base sm:text-2xl md:text-3xl mx-[2px] sm:mx-2 font-light flex-shrink-0">+</div>
                   <Ball num={draw.bonus} isBonus responsive onClick={() => handleBallClick(draw.bonus)} />
                 </div>
               </div>
