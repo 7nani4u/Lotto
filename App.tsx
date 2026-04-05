@@ -5,6 +5,7 @@ import {
   calculateBallColor,
   fetchLottoData,
   generateQuantumFlux,
+  fetchGithubCombinations,
   LottoStats,
   RepeatAnalysis,
 } from './services/lottoService';
@@ -40,12 +41,16 @@ const App: React.FC = () => {
   const [combinationCount, setCombinationCount] = useState(5);
   const [selectedAnalysisNum, setSelectedAnalysisNum] = useState<number | null>(null);
   const [repeatAnalysis, setRepeatAnalysis] = useState<RepeatAnalysis | null>(null);
+  const [githubCombinations, setGithubCombinations] = useState<number[][]>([]);
   const analysisReportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       setProgress(0);
+
+      // GitHub 로또 조합 데이터 비동기 로드
+      fetchGithubCombinations().then(data => setGithubCombinations(data));
 
       const data = await fetchLottoData((nextProgress, round) => {
         setProgress(nextProgress);
@@ -92,7 +97,7 @@ const App: React.FC = () => {
 
   const handleGenerateQuantum = () => {
     if (allData.length === 0) return;
-    setQuantumPredictions(generateUniquePredictionSet(() => generateQuantumFlux(allData), combinationCount));
+    setQuantumPredictions(generateUniquePredictionSet(() => generateQuantumFlux(allData, githubCombinations), combinationCount));
   };
 
   const handleBallClick = (num: number) => {
