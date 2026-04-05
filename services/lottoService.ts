@@ -548,14 +548,33 @@ export function generateQuantumFlux(results: LottoResult[], githubCombinations: 
   const stats = analyzeLotto(results);
   const prevResult = results[0];
   const oldResult = results[1];
-  let maxAttempts = 1500;
 
-  // Github 텍스트 파일에서 유효한 조합이 있다면 랜덤하게 하나를 선택하여 베이스(Seed)로 활용
   const hasGithubSeed = githubCombinations.length > 0;
-  const selectedGithubSeed = hasGithubSeed 
-    ? githubCombinations[Math.floor(Math.random() * githubCombinations.length)] 
-    : null;
 
+  // 1. Github 조합 파일이 존재하는 경우: 파일 내에서 직접 추출
+  if (hasGithubSeed) {
+    let fileAttempts = 10000; // 파일 내에서 조건을 만족하는 조합을 찾기 위한 충분한 시도 횟수
+    while (fileAttempts > 0) {
+      // 양자 요동을 의미하는 랜덤 인덱스로 파일 내 조합 하나를 선택
+      const randomIndex = Math.floor(Math.random() * githubCombinations.length);
+      const numbers = [...githubCombinations[randomIndex]];
+
+      // 파이썬 필터 고급 조건들을 통과하는지 검증
+      if (passesPythonFilters(numbers)) {
+        const formulas = [
+          '양자 요동 공식',
+          'GitHub 저장소 로또 조합 반영',
+          ...PYTHON_FILTER_FORMULAS,
+        ];
+        // 신뢰도를 높게 책정하고 파일 내 조합을 그대로 반환
+        return buildPredictionResult(numbers, 98, formulas);
+      }
+      fileAttempts--;
+    }
+  }
+
+  // 2. Github 파일이 없거나, 파일 내에서 필터를 통과하는 조합을 찾지 못한 경우 (기존 양자 요동 방식 폴백)
+  let maxAttempts = 1500;
   while (maxAttempts > 0) {
     const seededCandidates: number[] = [];
 
@@ -563,11 +582,6 @@ export function generateQuantumFlux(results: LottoResult[], githubCombinations: 
       let p1 = prevResult?.numbers[i] ?? Math.floor(Math.random() * 45) + 1;
       let p2 = oldResult?.numbers[i] ?? Math.floor(Math.random() * 45) + 1;
       
-      // Github 시드가 있으면 이전 회차 데이터 대신 시드 번호의 영향을 받도록 가중치 부여
-      if (selectedGithubSeed) {
-        p1 = selectedGithubSeed[i];
-      }
-
       const flux = Math.floor(Math.random() * 7);
       seededCandidates.push(((p1 + p2 + flux) % 45) + 1);
     }
@@ -584,10 +598,10 @@ export function generateQuantumFlux(results: LottoResult[], githubCombinations: 
     if (passesPythonFilters(numbers)) {
       const formulas = [
         '양자 요동 공식',
-        hasGithubSeed ? 'GitHub 저장소 로또 조합 반영' : '최근 2회차 가중치 연산',
+        '최근 2회차 가중치 연산',
         ...PYTHON_FILTER_FORMULAS,
       ];
-      return buildPredictionResult(numbers, hasGithubSeed ? 96 : 93, formulas);
+      return buildPredictionResult(numbers, 93, formulas);
     }
 
     maxAttempts--;
