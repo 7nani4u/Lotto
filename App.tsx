@@ -11,13 +11,18 @@ import {
 } from './services/lottoService';
 import { LottoResult, PredictionResult } from './types';
 
-const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; small?: boolean }> = ({
+const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; small?: boolean; responsive?: boolean }> = ({
   num,
   isBonus,
   onClick,
   small,
+  responsive,
 }) => {
-  const sizeClass = small ? 'w-8 h-8 text-xs sm:text-sm' : 'w-9 h-9 sm:w-10 sm:h-10 md:w-12 md:h-12 text-[15px] sm:text-lg md:text-xl flex-shrink-0';
+  let sizeClass = small ? 'w-8 h-8 text-xs sm:text-sm' : 'w-9 h-9 sm:w-10 sm:h-10 md:w-12 md:h-12 text-[15px] sm:text-lg md:text-xl flex-shrink-0';
+  
+  if (responsive) {
+    sizeClass = 'w-8 h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 text-xs sm:text-base md:text-xl flex-shrink-0';
+  }
 
   return (
     <div
@@ -304,13 +309,13 @@ const App: React.FC = () => {
                   <div className="text-sm text-gray-400 mt-1">{draw.date}</div>
                 </div>
                 <div className="flex items-center gap-1 sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-1 sm:px-2 w-full overflow-hidden">
-                  <div className="flex items-center gap-1 sm:gap-2">
+                  <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
                     {draw.numbers.map((num, i) => (
-                      <Ball key={i} num={num} small onClick={() => handleBallClick(num)} />
+                      <Ball key={i} num={num} responsive onClick={() => handleBallClick(num)} />
                     ))}
                   </div>
-                  <div className="text-gray-500 text-xl sm:text-3xl mx-1 sm:mx-2 font-light">+</div>
-                  <Ball num={draw.bonus} isBonus small onClick={() => handleBallClick(draw.bonus)} />
+                  <div className="text-gray-500 text-lg sm:text-2xl md:text-3xl mx-1 sm:mx-2 font-light flex-shrink-0">+</div>
+                  <Ball num={draw.bonus} isBonus responsive onClick={() => handleBallClick(draw.bonus)} />
                 </div>
               </div>
             ))}
