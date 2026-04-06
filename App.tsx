@@ -6,8 +6,13 @@ import {
   fetchLottoData,
   generateQuantumFlux,
   fetchGithubCombinations,
+  backtestStrategies,
+  optimizeQuantumParameters,
   LottoStats,
   RepeatAnalysis,
+  StrategyAnalysis,
+  QuantumOptimizationResult,
+  OptimizedWeights,
 } from './services/lottoService';
 import { LottoResult, PredictionResult } from './types';
 
@@ -47,7 +52,13 @@ const App: React.FC = () => {
   const [selectedAnalysisNum, setSelectedAnalysisNum] = useState<number | null>(null);
   const [repeatAnalysis, setRepeatAnalysis] = useState<RepeatAnalysis | null>(null);
   const [githubCombinations, setGithubCombinations] = useState<number[][]>([]);
+  const [strategyAnalysis, setStrategyAnalysis] = useState<StrategyAnalysis | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [quantumOptResult, setQuantumOptResult] = useState<QuantumOptimizationResult | null>(null);
+  const [isOptimizingQuantum, setIsOptimizingQuantum] = useState(false);
+  const [quantumApplied, setQuantumApplied] = useState(false);
   const analysisReportRef = useRef<HTMLDivElement>(null);
+  const strategyReportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -73,8 +84,8 @@ const App: React.FC = () => {
   const chartData = useMemo(() => {
     if (!stats) return [];
 
-    const sorted = Object.entries(stats.frequencies)
-      .map(([num, count]) => ({ num: Number(num), count }))
+    const sorted = Object.entries(stats.frequencies as Record<string, number>)
+      .map(([num, count]) => ({ num: Number(num), count: count as number }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 15);
 
@@ -100,9 +111,54 @@ const App: React.FC = () => {
     return Array.from(unique.values());
   };
 
+  // 양자 최적화 결과와 전략 분석 결과를 병합한 최종 가중치 계산
+  const mergedWeights = useMemo((): OptimizedWeights | undefined => {
+    const base = strategyAnalysis?.optimizedWeights;
+    if (!quantumOptResult || !quantumApplied) return base;
+    return {
+      gaussianFactor:      base?.gaussianFactor      ?? 1.0,
+      fibonacciFactor:     base?.fibonacciFactor      ?? 1.4,
+      goldenRatioFactor:   base?.goldenRatioFactor    ?? 1.6,
+      pythagoreanFactor:   base?.pythagoreanFactor    ?? 0.4,
+      paretoTier1Factor:   base?.paretoTier1Factor    ?? 2.5,
+      quantumNoiseFactor:  quantumOptResult.optimalQNoise,
+      quantumSigma:        quantumOptResult.optimalSigma,
+      whitsonFilterEnabled: base?.whitsonFilterEnabled ?? true,
+    };
+  }, [strategyAnalysis, quantumOptResult, quantumApplied]);
+
   const handleGenerateQuantum = () => {
     if (allData.length === 0) return;
-    setQuantumPredictions(generateUniquePredictionSet(() => generateQuantumFlux(allData, githubCombinations), combinationCount));
+    setQuantumPredictions(generateUniquePredictionSet(
+      () => generateQuantumFlux(allData, githubCombinations, mergedWeights),
+      combinationCount
+    ));
+  };
+
+  const handleQuantumOptimize = async () => {
+    if (allData.length === 0) return;
+    setIsOptimizingQuantum(true);
+    try {
+      const result = await optimizeQuantumParameters(allData, 52, 30);
+      setQuantumOptResult(result);
+      setQuantumApplied(false); // 새 결과는 적용 전 상태로
+    } catch (e) {
+      console.error('양자 최적화 오류:', e);
+    }
+    setIsOptimizingQuantum(false);
+  };
+
+  const handleRunAnalysis = async () => {
+    if (allData.length === 0) return;
+    setIsAnalyzing(true);
+    try {
+      const result = await backtestStrategies(allData, 52, 25);
+      setStrategyAnalysis(result);
+      setTimeout(() => { strategyReportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 200);
+    } catch (e) {
+      console.error('백테스트 오류:', e);
+    }
+    setIsAnalyzing(false);
   };
 
   const handleBallClick = (num: number) => {
@@ -147,7 +203,7 @@ const App: React.FC = () => {
             <span>🌌</span> 양자 변동 번호 추천
           </h2>
           <p className="text-gray-400 text-xs sm:text-sm mb-8 max-w-2xl break-keep">
-            최근 2회차 당첨 번호의 흐름과 양자 요동값을 결합한 뒤, 파이썬 필터(AC산술복잡도, 합46, 총합 85~189 등)의 고급 조건까지 함께 통과한 최적의 조합만 추출합니다.
+            피타고라스·피보나치/황금비(φ)·가우스 정규분포·Pareto 80/20·Whitson 패턴법칙·양자 요동 노이즈의 <strong className="text-purple-300">6종 수학 기법</strong>을 W(n)=G×P×F×φ×Py×Q 공식으로 통합한 뒤, Python 6종 고급 필터를 통과한 확률 최적화 조합만 추출합니다.
           </p>
 
           <div className="w-full flex flex-col md:flex-row items-center justify-center gap-4 mb-8">
@@ -208,6 +264,23 @@ const App: React.FC = () => {
                     <span className="font-bold text-gray-400 mr-2">적용된 알고리즘:</span>
                     {prediction.formulasUsed.join(', ')}
                   </div>
+
+                  {prediction.selectionReason && (
+                    <div className="mt-3 space-y-2 text-left text-xs">
+                      <div className="p-3 bg-indigo-950/60 rounded-lg border border-indigo-800/50">
+                        <span className="font-bold text-indigo-400 block mb-1">📐 1단계 · 모델 설계</span>
+                        <span className="text-gray-300 leading-relaxed">{prediction.selectionReason.stage1_modelDesign}</span>
+                      </div>
+                      <div className="p-3 bg-violet-950/60 rounded-lg border border-violet-800/50">
+                        <span className="font-bold text-violet-400 block mb-1">🧮 2단계 · 계산 로직</span>
+                        <span className="text-gray-300 leading-relaxed font-mono">{prediction.selectionReason.stage2_calcLogic}</span>
+                      </div>
+                      <div className="p-3 bg-cyan-950/60 rounded-lg border border-cyan-800/50">
+                        <span className="font-bold text-cyan-400 block mb-1">🎯 3단계 · 선택 근거</span>
+                        <span className="text-gray-300 leading-relaxed">{prediction.selectionReason.stage3_setReason}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -217,6 +290,372 @@ const App: React.FC = () => {
 
 
 
+
+        {/* ===== 양자 요동 파라미터 최적화 섹션 ===== */}
+        <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-2xl border border-yellow-900/40 mt-8">
+          <h2 className="text-2xl font-extrabold mb-3 text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-400 border-b border-gray-700 pb-4 flex items-center gap-2">
+            <span>⚛️</span> 양자 요동 파라미터 최적화
+          </h2>
+          <div className="text-gray-400 text-xs sm:text-sm mb-2 space-y-1 break-keep">
+            <p>Box-Muller 변환의 두 핵심 파라미터를 최근 1년 데이터로 그리드 탐색합니다.</p>
+            <div className="flex flex-col sm:flex-row gap-3 mt-3">
+              <div className="bg-gray-900/60 rounded-lg p-3 border border-gray-700 flex-1 text-xs">
+                <div className="text-yellow-400 font-bold mb-1">Q = 1.0 ± qNoise/2 (가중치 교란)</div>
+                <div className="text-gray-400">qNoise=0.3 → ±15% 교란 (현재 기본값)</div>
+                <div className="text-gray-500">테스트 범위: 0% ~ ±50%</div>
+              </div>
+              <div className="bg-gray-900/60 rounded-lg p-3 border border-gray-700 flex-1 text-xs">
+                <div className="text-orange-400 font-bold mb-1">z = √(-2ln u₁)·cos(2π u₂)·σ (번호 교란)</div>
+                <div className="text-gray-400">σ=2 → 68%가 ±2칸 이내 이동 (현재 기본값)</div>
+                <div className="text-gray-500">테스트 범위: σ=0 (없음) ~ σ=5</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-3 mt-6">
+            <button
+              onClick={handleQuantumOptimize}
+              disabled={isOptimizingQuantum || allData.length === 0}
+              className="px-6 py-3 bg-gradient-to-r from-yellow-600 to-orange-600 hover:from-yellow-500 hover:to-orange-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold text-base shadow-lg transition-all transform hover:scale-[1.02] active:scale-95 flex items-center gap-2"
+            >
+              {isOptimizingQuantum ? (
+                <><span className="animate-spin inline-block">⚛️</span> <span>그리드 탐색 중... (10~20초)</span></>
+              ) : (
+                <><span>⚛️</span> <span>{quantumOptResult ? '양자 파라미터 재탐색' : '최적 파라미터 탐색 실행'}</span></>
+              )}
+            </button>
+            {quantumOptResult && (
+              <button
+                onClick={() => setQuantumApplied(prev => !prev)}
+                className={`px-6 py-3 rounded-xl font-bold text-base shadow-lg transition-all transform hover:scale-[1.02] active:scale-95 flex items-center gap-2 border ${
+                  quantumApplied
+                    ? 'bg-emerald-700 border-emerald-500 text-white'
+                    : 'bg-gray-700 border-gray-500 text-gray-200 hover:bg-gray-600'
+                }`}
+              >
+                <span>{quantumApplied ? '✅' : '⬜'}</span>
+                <span>{quantumApplied ? '최적 파라미터 적용 중' : '최적 파라미터 적용하기'}</span>
+              </button>
+            )}
+          </div>
+
+          {quantumOptResult && (
+            <div className="mt-8 space-y-6 animate-fade-in">
+
+              {/* 현재 vs 최적 비교 */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-gray-900/80 rounded-xl p-4 border border-gray-700 text-center">
+                  <div className="text-xs text-gray-400 mb-2">무작위 기준선</div>
+                  <div className="text-2xl font-black text-gray-500">{quantumOptResult.randomBaseline}%</div>
+                  <div className="text-xs text-gray-500 mt-1">이론적 3+매치율</div>
+                </div>
+                <div className="bg-gray-900/80 rounded-xl p-4 border border-gray-600 text-center">
+                  <div className="text-xs text-gray-400 mb-2">현재 설정 (qNoise=0.3, σ=2)</div>
+                  <div className="text-2xl font-black text-blue-300">
+                    {quantumOptResult.qNoiseResults.find(r => r.paramValue === quantumOptResult.currentQNoise)?.hit3Rate.toFixed(2) ?? '—'}%
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">±15% 교란 / σ=2</div>
+                </div>
+                <div className={`rounded-xl p-4 border text-center ${quantumOptResult.improvementVsCurrent > 1 ? 'bg-emerald-950/50 border-emerald-600' : 'bg-gray-900/80 border-gray-600'}`}>
+                  <div className="text-xs text-gray-400 mb-2">
+                    최적 설정 (qNoise={quantumOptResult.optimalQNoise.toFixed(2)}, σ={quantumOptResult.optimalSigma})
+                  </div>
+                  <div className="text-2xl font-black text-yellow-300">
+                    {quantumOptResult.qNoiseResults.find(r => r.paramValue === quantumOptResult.optimalQNoise)?.hit3Rate.toFixed(2) ?? '—'}%
+                  </div>
+                  <div className={`text-xs mt-1 font-bold ${quantumOptResult.improvementVsCurrent > 0 ? 'text-emerald-400' : 'text-gray-400'}`}>
+                    현재 대비 {quantumOptResult.improvementVsCurrent > 0 ? '+' : ''}{quantumOptResult.improvementVsCurrent.toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+
+              {/* qNoise 스윕 바 차트 */}
+              <div>
+                <h3 className="text-base font-bold text-yellow-300 mb-3">
+                  가중치 교란 진폭 (qNoise) 탐색 결과
+                  <span className="text-xs text-gray-400 font-normal ml-2">Q = 1.0 ± qNoise/2 교란</span>
+                </h3>
+                <div className="space-y-2">
+                  {(() => {
+                    const maxRate = Math.max(...quantumOptResult.qNoiseResults.map(r => r.hit3Rate), 0.01);
+                    return quantumOptResult.qNoiseResults.map(r => {
+                      const isOptimal = r.paramValue === quantumOptResult.optimalQNoise;
+                      const isCurrent = r.paramValue === quantumOptResult.currentQNoise;
+                      const barWidth = Math.max(2, (r.hit3Rate / maxRate) * 100);
+                      return (
+                        <div key={r.paramValue} className={`flex items-center gap-3 p-2 rounded-lg ${isOptimal ? 'bg-yellow-950/40 border border-yellow-700/50' : isCurrent ? 'bg-blue-950/30 border border-blue-700/30' : ''}`}>
+                          <div className="w-32 text-xs text-gray-400 flex-shrink-0 text-right">
+                            {r.paramValue === 0 ? '교란 없음' : `±${(r.paramValue * 50).toFixed(0)}%`}
+                            {isOptimal && <span className="ml-1 text-yellow-400">★</span>}
+                            {isCurrent && !isOptimal && <span className="ml-1 text-blue-400">현재</span>}
+                          </div>
+                          <div className="flex-1 h-6 bg-gray-900 rounded overflow-hidden">
+                            <div
+                              className={`h-full rounded transition-all ${isOptimal ? 'bg-yellow-500' : isCurrent ? 'bg-blue-500' : 'bg-gray-600'}`}
+                              style={{ width: `${barWidth}%` }}
+                            />
+                          </div>
+                          <div className="w-20 text-right text-xs">
+                            <span className={`font-bold ${isOptimal ? 'text-yellow-300' : 'text-gray-300'}`}>{r.hit3Rate.toFixed(2)}%</span>
+                            <span className="text-gray-500 ml-1">({r.improvement >= 0 ? '+' : ''}{r.improvement.toFixed(0)}%)</span>
+                          </div>
+                          <div className="w-16 text-right text-xs text-gray-500">안정 {r.stabilityScore.toFixed(0)}점</div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+
+              {/* sigma 스윕 바 차트 */}
+              <div>
+                <h3 className="text-base font-bold text-orange-300 mb-3">
+                  Box-Muller 번호 교란 σ 탐색 결과
+                  <span className="text-xs text-gray-400 font-normal ml-2">z ~ N(0, σ²) 정규분포 교란</span>
+                </h3>
+                <div className="space-y-2">
+                  {(() => {
+                    const maxRate = Math.max(...quantumOptResult.sigmaResults.map(r => r.hit3Rate), 0.01);
+                    return quantumOptResult.sigmaResults.map(r => {
+                      const isOptimal = r.paramValue === quantumOptResult.optimalSigma;
+                      const isCurrent = r.paramValue === quantumOptResult.currentSigma;
+                      const barWidth = Math.max(2, (r.hit3Rate / maxRate) * 100);
+                      return (
+                        <div key={r.paramValue} className={`flex items-center gap-3 p-2 rounded-lg ${isOptimal ? 'bg-orange-950/40 border border-orange-700/50' : isCurrent ? 'bg-blue-950/30 border border-blue-700/30' : ''}`}>
+                          <div className="w-32 text-xs text-gray-400 flex-shrink-0 text-right">
+                            {r.paramValue === 0 ? '교란 없음' : `σ=${r.paramValue}`}
+                            {isOptimal && <span className="ml-1 text-orange-400">★</span>}
+                            {isCurrent && !isOptimal && <span className="ml-1 text-blue-400">현재</span>}
+                          </div>
+                          <div className="flex-1 h-6 bg-gray-900 rounded overflow-hidden">
+                            <div
+                              className={`h-full rounded transition-all ${isOptimal ? 'bg-orange-500' : isCurrent ? 'bg-blue-500' : 'bg-gray-600'}`}
+                              style={{ width: `${barWidth}%` }}
+                            />
+                          </div>
+                          <div className="w-20 text-right text-xs">
+                            <span className={`font-bold ${isOptimal ? 'text-orange-300' : 'text-gray-300'}`}>{r.hit3Rate.toFixed(2)}%</span>
+                            <span className="text-gray-500 ml-1">({r.improvement >= 0 ? '+' : ''}{r.improvement.toFixed(0)}%)</span>
+                          </div>
+                          <div className="w-20 text-right text-xs text-gray-500">68%가 ±{r.paramValue}칸</div>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+
+              {/* 인사이트 & 권장사항 */}
+              <div className="bg-yellow-950/30 rounded-xl p-5 border border-yellow-800/40 space-y-3">
+                <h3 className="text-sm font-bold text-yellow-300">분석 인사이트</h3>
+                <ul className="space-y-2">
+                  {quantumOptResult.insights.map((insight, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-gray-300">
+                      <span className="text-yellow-400 mt-0.5 flex-shrink-0">•</span>
+                      <span>{insight}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="border-t border-gray-700 pt-3">
+                  <div className="text-xs font-bold text-gray-400 mb-1">최종 권장 설정</div>
+                  <div className="text-sm text-white leading-relaxed">{quantumOptResult.recommendation}</div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-center text-xs">
+                  <div className="bg-gray-900/60 rounded-lg p-2 border border-gray-700">
+                    <div className="text-gray-400">최적 qNoise</div>
+                    <div className="font-black text-yellow-300 text-lg">{quantumOptResult.optimalQNoise.toFixed(2)}</div>
+                    <div className="text-gray-500">±{(quantumOptResult.optimalQNoise * 50).toFixed(0)}% 교란</div>
+                  </div>
+                  <div className="bg-gray-900/60 rounded-lg p-2 border border-gray-700">
+                    <div className="text-gray-400">최적 σ</div>
+                    <div className="font-black text-orange-300 text-lg">{quantumOptResult.optimalSigma}</div>
+                    <div className="text-gray-500">68%가 ±{quantumOptResult.optimalSigma}칸</div>
+                  </div>
+                  <div className="bg-gray-900/60 rounded-lg p-2 border border-gray-700">
+                    <div className="text-gray-400">분석 회차</div>
+                    <div className="font-black text-gray-200 text-lg">{quantumOptResult.analysedRounds}</div>
+                    <div className="text-gray-500">회차 × 30회 예측</div>
+                  </div>
+                  <div className={`rounded-lg p-2 border ${quantumApplied ? 'bg-emerald-950/50 border-emerald-600' : 'bg-gray-900/60 border-gray-700'}`}>
+                    <div className="text-gray-400">엔진 적용</div>
+                    <div className={`font-black text-lg ${quantumApplied ? 'text-emerald-300' : 'text-gray-500'}`}>{quantumApplied ? '✓ ON' : '✗ OFF'}</div>
+                    <div className="text-gray-500">위 버튼으로 전환</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ===== 전략 분석 & 최적화 섹션 ===== */}
+        <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-2xl border border-emerald-900/50 mt-8">
+          <h2 className="text-2xl font-extrabold mb-3 text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400 border-b border-gray-700 pb-4 flex items-center gap-2">
+            <span>🔬</span> 최근 1년 전략 비교 분석 & 최적화
+          </h2>
+          <p className="text-gray-400 text-xs sm:text-sm mb-6 break-keep">
+            6종 수학 기법을 최근 52회차(약 1년)에 대해 백테스팅하여 단일·병합·하이브리드 접근법의 성과를 비교하고, 가장 우수한 가중치를 자동으로 양자 변동 엔진에 적용합니다.
+          </p>
+
+          <button
+            onClick={handleRunAnalysis}
+            disabled={isAnalyzing || allData.length === 0}
+            className="w-full md:w-auto px-8 py-3 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-bold text-lg shadow-lg transition-all transform hover:scale-[1.02] active:scale-95 flex items-center gap-2 mx-auto"
+          >
+            {isAnalyzing ? (
+              <><span className="animate-spin">⚙️</span> <span>백테스팅 실행 중... (약 5~15초 소요)</span></>
+            ) : (
+              <><span>🧪</span> <span>{strategyAnalysis ? '전략 재분석 실행' : '전략 분석 실행 (최근 1년)'}</span></>
+            )}
+          </button>
+
+          {strategyAnalysis && (
+            <div ref={strategyReportRef} className="mt-8 space-y-6 animate-fade-in">
+
+              {/* 기준선 */}
+              <div className="bg-gray-900/80 rounded-xl p-4 border border-gray-700 text-sm text-gray-400">
+                <span className="text-white font-bold">분석 기준:</span> 최근 {strategyAnalysis.analysedRounds}회차 | 회차당 25회 예측 |
+                무작위 기준선 <span className="text-yellow-400 font-bold">{strategyAnalysis.randomBaseline}%</span> (3+매치 이론값)
+                {strategyAnalysis.optimizedWeights.whitsonFilterEnabled && (
+                  <span className="ml-2 px-2 py-0.5 bg-emerald-800 text-emerald-300 rounded text-xs">✓ 최적화 가중치 적용됨</span>
+                )}
+              </div>
+
+              {/* A. 단일 전략 결과 */}
+              <div>
+                <h3 className="text-lg font-bold text-emerald-300 mb-3">A. 단일 전략 비교 (3+매치율 기준)</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-gray-400 border-b border-gray-700">
+                        <th className="text-left py-2 pr-4">전략</th>
+                        <th className="text-right py-2 pr-4">평균 일치수</th>
+                        <th className="text-right py-2 pr-4">2+매치율</th>
+                        <th className="text-right py-2 pr-4">3+매치율</th>
+                        <th className="text-right py-2 pr-4">기준선 대비</th>
+                        <th className="text-center py-2">등급</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {strategyAnalysis.individual.map((r, i) => (
+                        <tr key={r.key} className={`border-b border-gray-800 ${i === 0 ? 'bg-emerald-950/30' : ''}`}>
+                          <td className="py-2 pr-4 font-medium text-white">{r.name}</td>
+                          <td className="text-right py-2 pr-4 text-gray-300">{r.avgMatches.toFixed(3)}</td>
+                          <td className="text-right py-2 pr-4 text-blue-300">{r.hit2Rate.toFixed(2)}%</td>
+                          <td className="text-right py-2 pr-4 font-bold text-yellow-300">{r.hit3Rate.toFixed(2)}%</td>
+                          <td className={`text-right py-2 pr-4 font-bold ${r.improvement >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {r.improvement >= 0 ? '+' : ''}{r.improvement.toFixed(0)}%
+                          </td>
+                          <td className="text-center py-2">
+                            <span className={`px-2 py-0.5 rounded text-xs font-bold ${r.grade === 'S' ? 'bg-yellow-500 text-black' : r.grade === 'A' ? 'bg-emerald-600 text-white' : r.grade === 'B' ? 'bg-blue-600 text-white' : r.grade === 'C' ? 'bg-gray-600 text-white' : 'bg-red-900 text-white'}`}>{r.grade}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* B. 전략 병합 결과 */}
+              <div>
+                <h3 className="text-lg font-bold text-cyan-300 mb-3">B. 전략 병합 비교 (2~6개)</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {strategyAnalysis.comboResults.map((r) => (
+                    <div key={r.label} className="bg-gray-900/80 rounded-xl p-4 border border-gray-700">
+                      <div className="text-xs text-cyan-400 font-bold mb-1">{r.label}</div>
+                      <div className="text-2xl font-black text-white">{r.hit3Rate.toFixed(2)}%</div>
+                      <div className={`text-xs mt-1 font-bold ${r.improvement >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        기준선 대비 {r.improvement >= 0 ? '+' : ''}{r.improvement.toFixed(0)}%
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* C. 하이브리드 + 최종 비교 */}
+              <div>
+                <h3 className="text-lg font-bold text-purple-300 mb-3">C. 접근법 종합 비교 & 하이브리드</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 text-center text-xs">
+                  {[
+                    { label: '단일 최고', value: strategyAnalysis.approachScores.singleBest, color: 'text-yellow-300' },
+                    { label: '2전략 병합', value: strategyAnalysis.approachScores.combo2, color: 'text-blue-300' },
+                    { label: '3전략 병합', value: strategyAnalysis.approachScores.combo3, color: 'text-blue-300' },
+                    { label: '4전략 병합', value: strategyAnalysis.approachScores.combo4, color: 'text-cyan-300' },
+                    { label: '5전략 병합', value: strategyAnalysis.approachScores.combo5, color: 'text-cyan-300' },
+                    { label: '6전략 병합', value: strategyAnalysis.approachScores.combo6, color: 'text-purple-300' },
+                    { label: '팩터 하이브리드', value: strategyAnalysis.approachScores.hybrid, color: 'text-emerald-300' },
+                  ].map(item => {
+                    const maxVal = Math.max(...(Object.values(strategyAnalysis.approachScores) as number[]));
+                    const isBest = Math.abs(item.value - maxVal) < 0.001;
+                    return (
+                      <div key={item.label} className={`bg-gray-900/80 rounded-xl p-3 border ${isBest ? 'border-emerald-500 ring-1 ring-emerald-500' : 'border-gray-700'}`}>
+                        <div className="text-gray-400 mb-1 leading-tight">{item.label}</div>
+                        <div className={`text-xl font-black ${item.color}`}>{item.value.toFixed(2)}%</div>
+                        {isBest && <div className="text-emerald-400 text-[10px] mt-1 font-bold">★ 최고</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 최적화 가중치 */}
+              <div className="bg-indigo-950/50 rounded-xl p-4 border border-indigo-800/50">
+                <h3 className="text-sm font-bold text-indigo-300 mb-3">최적화된 엔진 가중치 (백테스트 기반 자동 보정)</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2 text-xs text-center">
+                  {[
+                    { label: '가우스', val: strategyAnalysis.optimizedWeights.gaussianFactor, unit: 'x' },
+                    { label: '피보나치', val: strategyAnalysis.optimizedWeights.fibonacciFactor, unit: 'x' },
+                    { label: '황금비(φ)', val: strategyAnalysis.optimizedWeights.goldenRatioFactor, unit: 'x' },
+                    { label: '피타고라스', val: strategyAnalysis.optimizedWeights.pythagoreanFactor, unit: '+' },
+                    { label: 'Pareto Tier1', val: strategyAnalysis.optimizedWeights.paretoTier1Factor, unit: 'x' },
+                    { label: '양자노이즈', val: strategyAnalysis.optimizedWeights.quantumNoiseFactor, unit: '±' },
+                    { label: 'Whitson 필터', val: strategyAnalysis.optimizedWeights.whitsonFilterEnabled ? 1 : 0, unit: '' },
+                  ].map(item => (
+                    <div key={item.label} className="bg-gray-900/60 rounded-lg p-2 border border-gray-700">
+                      <div className="text-gray-400 mb-1">{item.label}</div>
+                      <div className="font-black text-white">
+                        {item.label === 'Whitson 필터'
+                          ? (item.val ? '✓ ON' : '✗ OFF')
+                          : `${item.unit}${item.val.toFixed(2)}`}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 최종 추천 + 필터 조건 */}
+              <div className="bg-emerald-950/40 rounded-xl p-5 border border-emerald-800/50 space-y-4">
+                <h3 className="text-base font-bold text-emerald-300">최종 추천 전략 & 필터 조건</h3>
+                <p className="text-gray-300 text-sm leading-relaxed">{strategyAnalysis.recommendation}</p>
+                <div className="border-t border-gray-700 pt-4">
+                  <div className="text-xs font-bold text-gray-400 mb-2">권장 필터 조건 (백테스트 검증 완료)</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    {[
+                      { filter: '총합 범위', condition: '85 ~ 189', reason: '전체 당첨 이력 95% 커버' },
+                      { filter: 'AC 산술복잡도', condition: '≥ 7', reason: '번호 다양성 보장' },
+                      { filter: '합46 쌍', condition: '0 ~ 2쌍', reason: '패턴 편중 방지' },
+                      { filter: '상/하위 비율', condition: '1.5 ~ 4.5', reason: '번호 분산 균형' },
+                      { filter: '연속 번호', condition: '최대 2쌍, 3연속 제외', reason: '극단 패턴 방지' },
+                      { filter: '번대별 분산', condition: '한 번대 최대 3개', reason: '번대 쏠림 방지' },
+                      { filter: 'Whitson 홀짝', condition: strategyAnalysis.optimizedWeights.whitsonFilterEnabled ? '최근 15회 평균 ±1' : '미적용 (성과 낮음)', reason: 'Whitson 패턴 반복 구조' },
+                      { filter: 'Pareto 구성', condition: 'Hot Top-9에서 최소 2개', reason: '80/20 법칙 준수' },
+                    ].map(item => (
+                      <div key={item.filter} className="bg-gray-900/60 rounded-lg p-3 border border-gray-700/50 flex items-start gap-2">
+                        <div className="text-emerald-400 mt-0.5">✓</div>
+                        <div>
+                          <div className="font-bold text-white">{item.filter}: <span className="text-yellow-300">{item.condition}</span></div>
+                          <div className="text-gray-400 mt-0.5">{item.reason}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="text-xs text-gray-500 pt-2 border-t border-gray-800">
+                  ⚠️ 분석 결과는 통계적 패턴 기반이며, 로또는 본질적으로 무작위입니다. 분석 재실행 시 확률적 변동이 발생할 수 있습니다.
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
           <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700">
