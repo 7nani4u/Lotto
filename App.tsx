@@ -58,6 +58,7 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [quantumOptResult, setQuantumOptResult] = useState<QuantumOptimizationResult | null>(null);
   const [isOptimizingQuantum, setIsOptimizingQuantum] = useState(false);
+  const [isGeneratingQuantum, setIsGeneratingQuantum] = useState(false);
   const [quantumApplied, setQuantumApplied] = useState(false);
   const analysisReportRef = useRef<HTMLDivElement>(null);
   const strategyReportRef = useRef<HTMLDivElement>(null);
@@ -180,8 +181,15 @@ const App: React.FC = () => {
     };
   }, [strategyAnalysis, quantumOptResult, quantumApplied]);
 
-  const handleGenerateQuantum = () => {
-    if (allData.length === 0) return;
+  const handleGenerateQuantum = async () => {
+    if (allData.length === 0 || isGeneratingQuantum) return;
+
+    setIsGeneratingQuantum(true);
+    setGenerationStatus('추출하는 중...');
+
+    await new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), 0);
+    });
 
     const nextPredictions = generateUniquePredictionSet(
       () => generateQuantumFlux(allData, githubCombinations, mergedWeights),
@@ -192,15 +200,18 @@ const App: React.FC = () => {
 
     if (nextPredictions.length === 0) {
       setGenerationStatus('이전에 한 번이라도 출력된 조합을 제외한 새 조합을 찾지 못했습니다.');
+      setIsGeneratingQuantum(false);
       return;
     }
 
     if (nextPredictions.length < combinationCount) {
       setGenerationStatus(`중복 없는 새 조합 ${nextPredictions.length}개만 생성했습니다.`);
+      setIsGeneratingQuantum(false);
       return;
     }
 
     setGenerationStatus(null);
+    setIsGeneratingQuantum(false);
   };
 
   const handleQuantumOptimize = async () => {
@@ -292,19 +303,21 @@ const App: React.FC = () => {
           </div>
 
           <button
-            onClick={handleGenerateQuantum}
-            disabled={isAnalyzing || isOptimizingQuantum}
-            className={`w-full md:w-2/3 px-4 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-2xl font-black text-xl sm:text-2xl shadow-[0_0_20px_rgba(147,51,234,0.4)] transition-all transform hover:scale-[1.02] active:scale-95 mb-8 flex items-center justify-center gap-2 sm:gap-3 break-keep ${isAnalyzing || isOptimizingQuantum ? 'opacity-60 cursor-not-allowed' : ''}`}
+            onClick={() => { void handleGenerateQuantum(); }}
+            disabled={isAnalyzing || isOptimizingQuantum || isGeneratingQuantum}
+            className={`w-full md:w-2/3 px-4 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-2xl font-black text-xl sm:text-2xl shadow-[0_0_20px_rgba(147,51,234,0.4)] transition-all transform hover:scale-[1.02] active:scale-95 mb-8 flex items-center justify-center gap-2 sm:gap-3 break-keep ${isAnalyzing || isOptimizingQuantum || isGeneratingQuantum ? 'opacity-60 cursor-not-allowed' : ''}`}
           >
             {isAnalyzing || isOptimizingQuantum ? (
               <><span className="animate-spin">⚙️</span> <span className="whitespace-nowrap">AI 엔진 준비 중...</span></>
+            ) : isGeneratingQuantum ? (
+              <><span className="animate-spin">🎲</span> <span className="whitespace-nowrap">추출하는 중...</span></>
             ) : (
               <><span>🚀</span> <span className="whitespace-nowrap">양자 변동 번호 추출</span></>
             )}
           </button>
 
           {generationStatus && (
-            <div className="w-full md:w-2/3 mb-6 rounded-xl border border-amber-700/50 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
+            <div className={`w-full md:w-2/3 mb-6 rounded-xl px-4 py-3 text-sm ${isGeneratingQuantum ? 'border border-blue-700/50 bg-blue-950/40 text-blue-200' : 'border border-amber-700/50 bg-amber-950/40 text-amber-200'}`}>
               {generationStatus}
             </div>
           )}
