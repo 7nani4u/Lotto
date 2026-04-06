@@ -16,6 +16,8 @@ import {
 } from './services/lottoService';
 import { LottoResult, PredictionResult } from './types';
 
+const GENERATED_HISTORY_KEY = 'lottoQuantumGeneratedHistoryV1';
+
 const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; small?: boolean; responsive?: boolean }> = ({
   num,
   isBonus,
@@ -60,6 +62,21 @@ const App: React.FC = () => {
   const analysisReportRef = useRef<HTMLDivElement>(null);
   const strategyReportRef = useRef<HTMLDivElement>(null);
   const autoInitStartedRef = useRef(false);
+  const generatedHistoryRef = useRef<Set<string>>(new Set());
+  const [generationStatus, setGenerationStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      const savedHistory = localStorage.getItem(GENERATED_HISTORY_KEY);
+      if (savedHistory) {
+        const parsed = JSON.parse(savedHistory) as string[];
+        generatedHistoryRef.current = new Set(parsed);
+      }
+    } catch (e) {
+      console.error('조합 기록 로드 오류:', e);
+      generatedHistoryRef.current = new Set();
+    }
+  }, []);
 
   useEffect(() => {
     const loadData = async () => {
@@ -109,18 +126,42 @@ const App: React.FC = () => {
     }));
   }, [stats]);
 
+  const saveGeneratedHistory = (history: Set<string>) => {
+    try {
+      localStorage.setItem(GENERATED_HISTORY_KEY, JSON.stringify(Array.from(history)));
+    } catch (e) {
+      console.error('조합 기록 저장 오류:', e);
+    }
+  };
+
   const generateUniquePredictionSet = (generator: () => PredictionResult, count: number) => {
     const unique = new Map<string, PredictionResult>();
     let attempts = 0;
-    const maxAttempts = Math.max(20, count * 20);
+    const maxAttempts = Math.max(300, count * 300);
 
     while (unique.size < count && attempts < maxAttempts) {
       const result = generator();
-      unique.set(result.numbers.join('-'), result);
+      const key = result.numbers.join('-');
+
+      if (generatedHistoryRef.current.has(key) || unique.has(key)) {
+        attempts++;
+        continue;
+      }
+
+      unique.set(key, result);
       attempts++;
     }
 
-    return Array.from(unique.values());
+    const nextPredictions = Array.from(unique.values());
+
+    if (nextPredictions.length > 0) {
+      const nextHistory = new Set(generatedHistoryRef.current);
+      nextPredictions.forEach((prediction) => nextHistory.add(prediction.numbers.join('-')));
+      generatedHistoryRef.current = nextHistory;
+      saveGeneratedHistory(nextHistory);
+    }
+
+    return nextPredictions;
   };
 
   // 양자 최적화 결과와 전략 분석 결과를 병합한 최종 가중치 계산
@@ -141,10 +182,25 @@ const App: React.FC = () => {
 
   const handleGenerateQuantum = () => {
     if (allData.length === 0) return;
-    setQuantumPredictions(generateUniquePredictionSet(
+
+    const nextPredictions = generateUniquePredictionSet(
       () => generateQuantumFlux(allData, githubCombinations, mergedWeights),
       combinationCount
-    ));
+    );
+
+    setQuantumPredictions(nextPredictions);
+
+    if (nextPredictions.length === 0) {
+      setGenerationStatus('이전에 한 번이라도 출력된 조합을 제외한 새 조합을 찾지 못했습니다.');
+      return;
+    }
+
+    if (nextPredictions.length < combinationCount) {
+      setGenerationStatus(`중복 없는 새 조합 ${nextPredictions.length}개만 생성했습니다.`);
+      return;
+    }
+
+    setGenerationStatus(null);
   };
 
   const handleQuantumOptimize = async () => {
@@ -247,6 +303,12 @@ const App: React.FC = () => {
             )}
           </button>
 
+          {generationStatus && (
+            <div className="w-full md:w-2/3 mb-6 rounded-xl border border-amber-700/50 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
+              {generationStatus}
+            </div>
+          )}
+
           {quantumPredictions.length > 0 && (
             <div className="w-full grid grid-cols-1 xl:grid-cols-2 gap-4 animate-fade-in">
               {quantumPredictions.map((prediction, index) => (
@@ -282,22 +344,6 @@ const App: React.FC = () => {
                     {prediction.formulasUsed.join(', ')}
                   </div>
 
-                  {prediction.selectionReason && (
-                    <div className="mt-3 space-y-2 text-left text-xs">
-                      <div className="p-3 bg-indigo-950/60 rounded-lg border border-indigo-800/50">
-                        <span className="font-bold text-indigo-400 block mb-1">📐 1단계 · 모델 설계</span>
-                        <span className="text-gray-300 leading-relaxed">{prediction.selectionReason.stage1_modelDesign}</span>
-                      </div>
-                      <div className="p-3 bg-violet-950/60 rounded-lg border border-violet-800/50">
-                        <span className="font-bold text-violet-400 block mb-1">🧮 2단계 · 계산 로직</span>
-                        <span className="text-gray-300 leading-relaxed font-mono">{prediction.selectionReason.stage2_calcLogic}</span>
-                      </div>
-                      <div className="p-3 bg-cyan-950/60 rounded-lg border border-cyan-800/50">
-                        <span className="font-bold text-cyan-400 block mb-1">🎯 3단계 · 선택 근거</span>
-                        <span className="text-gray-300 leading-relaxed">{prediction.selectionReason.stage3_setReason}</span>
-                      </div>
-                    </div>
-                  )}
                 </div>
               ))}
             </div>
