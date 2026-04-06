@@ -316,8 +316,8 @@ const App: React.FC = () => {
             )}
           </button>
 
-          {generationStatus && (
-            <div className={`w-full md:w-2/3 mb-6 rounded-xl px-4 py-3 text-sm ${isGeneratingQuantum ? 'border border-blue-700/50 bg-blue-950/40 text-blue-200' : 'border border-amber-700/50 bg-amber-950/40 text-amber-200'}`}>
+          {generationStatus && !isGeneratingQuantum && (
+            <div className="w-full md:w-2/3 mb-6 rounded-xl border border-amber-700/50 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
               {generationStatus}
             </div>
           )}
