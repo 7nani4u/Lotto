@@ -62,6 +62,10 @@ const App: React.FC = () => {
   const [quantumApplied, setQuantumApplied] = useState(false);
   const analysisReportRef = useRef<HTMLDivElement>(null);
   const strategyReportRef = useRef<HTMLDivElement>(null);
+  const reportSectionRef = useRef<HTMLDivElement>(null);
+  const [reportHtml, setReportHtml] = useState<string | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const autoInitStartedRef = useRef(false);
   const generatedHistoryRef = useRef<Set<string>>(new Set());
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
@@ -240,6 +244,97 @@ const App: React.FC = () => {
     setIsAnalyzing(false);
   };
 
+  // -------------------------------------------------------
+  // 45labs.kr HTML에서 불필요한 섹션 · 요소를 제거하고
+  // 렌더링 가능한 정제 HTML 문자열을 반환한다.
+  // -------------------------------------------------------
+  const parseReportHtml = (rawHtml: string): string => {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(rawHtml, 'text/html');
+
+    // 스크립트 · 스타일 · iframe · 폼 제거
+    doc.querySelectorAll('script, style, iframe, form, noscript').forEach(el => el.remove());
+
+    // nav / header / footer 제거
+    doc.querySelectorAll('nav, header, footer').forEach(el => el.remove());
+
+    // 버튼 제거
+    doc.querySelectorAll('button').forEach(el => el.remove());
+
+    // 외부 링크를 span으로 대체 (광고·공유 버튼 방지)
+    doc.querySelectorAll<HTMLAnchorElement>('a[href^="http"]').forEach(anchor => {
+      const span = doc.createElement('span');
+      span.textContent = anchor.textContent;
+      span.className = anchor.className;
+      anchor.replaceWith(span);
+    });
+
+    // "번호별 상세 분석" · "당첨금 정보" 섹션 제거
+    // 해당 제목이 포함된 헤딩을 찾아 가장 가까운 상위 컨테이너를 삭제
+    const EXCLUDED_SECTIONS = ['번호별 상세 분석', '당첨금 정보'];
+    doc.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(heading => {
+      const text = heading.textContent?.trim() ?? '';
+      if (EXCLUDED_SECTIONS.some(kw => text.includes(kw))) {
+        // 섹션 래퍼(section, article, div[class]) 단위로 올라가며 제거
+        let target: Element | null = heading;
+        for (let i = 0; i < 4; i++) {
+          const parent = target?.parentElement;
+          if (!parent) break;
+          const tag = parent.tagName.toLowerCase();
+          if (tag === 'section' || tag === 'article' || (tag === 'div' && parent.className)) {
+            target = parent;
+            break;
+          }
+          target = parent;
+        }
+        target?.remove();
+      }
+    });
+
+    // 광고 패턴 클래스 제거 (ad, banner, popup, cookie 등)
+    const AD_PATTERN = /ad[s_-]?|banner|popup|cookie|toast|modal|overlay|sidebar/i;
+    doc.querySelectorAll('[class]').forEach(el => {
+      if (AD_PATTERN.test((el as HTMLElement).className)) el.remove();
+    });
+
+    // 메인 콘텐츠 추출 우선순위: main > article > .content > #content > body
+    const main =
+      doc.querySelector('main') ??
+      doc.querySelector('article') ??
+      doc.querySelector('[class*="content"]') ??
+      doc.querySelector('#content') ??
+      doc.body;
+
+    return main?.innerHTML ?? '';
+  };
+
+  // -------------------------------------------------------
+  // "최근 당첨 번호" 섹션의 공 클릭 시 호출.
+  // 클릭한 번호와 무관하게 항상 동일한 45labs 리포트 출력.
+  // 이미 로드된 경우 재요청 없이 스크롤만 이동.
+  // -------------------------------------------------------
+  const handleDrawBallClick = async () => {
+    // 이미 데이터가 있으면 바로 스크롤
+    if (reportHtml) {
+      setTimeout(() => reportSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+      return;
+    }
+    setReportLoading(true);
+    setReportError(null);
+    setTimeout(() => reportSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
+    try {
+      const res = await fetch('/api/report');
+      const data = await res.json() as { html?: string; error?: string; detail?: string };
+      if (!res.ok || data.error) {
+        throw new Error(data.error ?? `HTTP ${res.status}`);
+      }
+      setReportHtml(parseReportHtml(data.html ?? ''));
+    } catch (e) {
+      setReportError(e instanceof Error ? e.message : '리포트를 불러오지 못했습니다.');
+    }
+    setReportLoading(false);
+  };
+
   const handleBallClick = (num: number) => {
     setSelectedAnalysisNum(num);
     setRepeatAnalysis(analyzeRepeatProbability(allData, num, 100));
@@ -365,83 +460,80 @@ const App: React.FC = () => {
 
         {/* 내부 분석/최적화는 자동 실행되며 화면에는 표시하지 않음 */}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
-          <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700">
-            <div className="flex flex-col items-center border-b border-gray-700 pb-4 mb-6">
-              <h3 className="text-xl font-bold text-blue-300">최근 많이 나온 번호 (Top 15)</h3>
-              <div className="text-xs text-yellow-400 mt-2">💡 공을 클릭하여 정밀 분석 확인</div>
-            </div>
-            <div className="space-y-3">
-              {chartData.map((item, index) => (
-                <div key={item.num} className="flex items-center gap-3 relative">
-                  <div className={`w-8 sm:w-10 font-bold text-right flex-shrink-0 ${index < 3 ? 'text-yellow-400' : index < 5 ? 'text-gray-300' : 'text-gray-500'}`}>
-                    <span className="whitespace-nowrap">{index + 1}위</span>
-                  </div>
-                  <div className="w-10 flex-shrink-0 flex justify-center">
-                    <Ball num={item.num} small onClick={() => handleBallClick(item.num)} />
-                  </div>
-                  <div className="flex-1 h-6 bg-gray-900 rounded-full overflow-hidden flex items-center">
-                    <div
-                      className={`h-full ${index < 5 ? 'bg-blue-500' : 'bg-gray-600'} transition-all duration-500`}
-                      style={{ width: `${item.percentage}%` }}
-                    />
-                  </div>
-                  <div className="w-12 text-right font-medium text-gray-300 flex-shrink-0 text-sm sm:text-base">
-                    <span className="whitespace-nowrap">{item.count}회</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700 flex flex-col">
+        {/* ── 종합 통계 요약 (전체 너비, Hot/Cold 집중) ── */}
+        {stats && (
+          <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700 mt-8">
             <h3 className="text-xl font-bold mb-6 text-blue-300 text-center border-b border-gray-700 pb-4">종합 통계 요약</h3>
-            {stats && (
-              <div className="space-y-6 flex-1 flex flex-col justify-center">
-                <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
-                  <div className="text-sm text-gray-400 mb-3 font-medium flex items-center gap-2">
-                    <span className="text-red-400">🔥</span> 가장 많이 나온 번호 (Hot 5)
-                  </div>
-                  <div className="flex gap-2 flex-wrap">
-                    {stats.hotNumbers.slice(0, 5).map((n) => (
-                      <Ball key={n} num={n} onClick={() => handleBallClick(n)} />
-                    ))}
-                  </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
+                <div className="text-sm text-gray-400 mb-3 font-medium flex items-center gap-2">
+                  <span className="text-red-400">🔥</span> 가장 많이 나온 번호 (Hot 5)
+                  <span className="ml-auto text-xs text-yellow-400">클릭 → 정밀 분석</span>
                 </div>
-
-                <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
-                  <div className="text-sm text-gray-400 mb-3 font-medium flex items-center gap-2">
-                    <span className="text-blue-400">❄️</span> 가장 안 나온 번호 (Cold 5)
-                  </div>
-                  <div className="flex gap-2 flex-wrap">
-                    {stats.coldNumbers.slice(0, 5).map((n) => (
-                      <Ball key={n} num={n} onClick={() => handleBallClick(n)} />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex justify-between bg-gray-900 p-5 rounded-xl border border-gray-700">
-                  <div>
-                    <div className="text-sm text-gray-400 mb-1 font-medium">평균 총합</div>
-                    <div className="text-2xl font-bold text-white">{stats.averageSum}</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-gray-400 mb-1 font-medium">평균 홀짝 비율</div>
-                    <div className="text-2xl font-bold text-blue-300">{stats.oddEvenAverage}</div>
-                  </div>
+                <div className="flex gap-2 flex-wrap">
+                  {stats.hotNumbers.slice(0, 5).map((n) => (
+                    <Ball key={n} num={n} onClick={() => handleBallClick(n)} />
+                  ))}
                 </div>
               </div>
-            )}
+              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
+                <div className="text-sm text-gray-400 mb-3 font-medium flex items-center gap-2">
+                  <span className="text-blue-400">❄️</span> 가장 안 나온 번호 (Cold 5)
+                  <span className="ml-auto text-xs text-yellow-400">클릭 → 정밀 분석</span>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {stats.coldNumbers.slice(0, 5).map((n) => (
+                    <Ball key={n} num={n} onClick={() => handleBallClick(n)} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── 최근 많이 나온 번호 Top 15 (가로형 카드 그리드) ── */}
+        <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700 mt-8">
+          <div className="flex flex-col items-center border-b border-gray-700 pb-4 mb-6">
+            <h3 className="text-xl font-bold text-blue-300">최근 많이 나온 번호 (Top 15)</h3>
+            <div className="text-xs text-yellow-400 mt-2">💡 공을 클릭하여 정밀 분석 확인</div>
+          </div>
+          {/* 5열 × 3행 가로형 카드 레이아웃 */}
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+            {chartData.map((item, index) => (
+              <div
+                key={item.num}
+                className="flex flex-col items-center bg-gray-900 rounded-xl p-3 border border-gray-700 hover:border-blue-500 transition-colors cursor-pointer"
+                onClick={() => handleBallClick(item.num)}
+              >
+                {/* 순위 */}
+                <span className={`text-[11px] font-bold mb-1 ${index < 3 ? 'text-yellow-400' : index < 5 ? 'text-gray-300' : 'text-gray-500'}`}>
+                  {index + 1}위
+                </span>
+                {/* 번호 공 */}
+                <Ball num={item.num} small />
+                {/* 출현 횟수 */}
+                <span className="text-xs text-gray-400 mt-1">{item.count}회</span>
+                {/* 미니 바 차트 */}
+                <div className="w-full h-1 bg-gray-800 rounded-full mt-1.5 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${index < 5 ? 'bg-blue-500' : 'bg-gray-600'}`}
+                    style={{ width: `${item.percentage}%` }}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
+        {/* ── 최근 당첨 번호 ── */}
+        {/* 번호 클릭 시 handleDrawBallClick 호출 → 45labs 리포트를 아래 섹션에 출력 */}
         <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-gray-700 mt-8">
           <div className="flex flex-col md:flex-row items-center justify-between border-b border-gray-700 pb-4 mb-6">
             <h2 className="text-2xl font-bold text-blue-300">최근 당첨 번호</h2>
-            <div className="text-xs sm:text-sm text-yellow-400 bg-yellow-400/10 px-3 py-2 rounded-xl mt-3 md:mt-0 flex items-center justify-center gap-2 animate-pulse text-center break-keep">
-              <span>💡</span>
+            <div className="text-xs sm:text-sm text-green-400 bg-green-400/10 px-3 py-2 rounded-xl mt-3 md:mt-0 flex items-center justify-center gap-2 animate-pulse text-center break-keep">
+              <span>📋</span>
               <span>
-                공을 클릭하면 해당 번호의 <strong className="whitespace-nowrap">정밀 분석 리포트</strong>를 볼 수 있습니다.
+                공을 클릭하면 <strong className="whitespace-nowrap">45labs 회차 분석 리포트</strong>를 볼 수 있습니다.
               </span>
             </div>
           </div>
@@ -449,7 +541,7 @@ const App: React.FC = () => {
             {allData.slice(0, 10).map((draw, idx) => (
               <div
                 key={idx}
-                className="flex flex-col md:flex-row items-center justify-between bg-gray-900 p-4 sm:p-5 rounded-xl border border-gray-700 hover:border-gray-500 transition-colors"
+                className="flex flex-col md:flex-row items-center justify-between bg-gray-900 p-4 sm:p-5 rounded-xl border border-gray-700 hover:border-green-700/60 transition-colors"
               >
                 <div className="text-center md:text-left mb-4 md:mb-0 w-32 flex-shrink-0">
                   <div className="text-xl font-black text-white">{draw.round}회차</div>
@@ -458,16 +550,73 @@ const App: React.FC = () => {
                 <div className="flex items-center gap-[3px] sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-0 sm:px-2 w-full max-w-full">
                   <div className="flex items-center gap-[3px] sm:gap-2 flex-shrink-0">
                     {draw.numbers.map((num, i) => (
-                      <Ball key={i} num={num} responsive onClick={() => handleBallClick(num)} />
+                      <Ball key={i} num={num} responsive onClick={() => void handleDrawBallClick()} />
                     ))}
                   </div>
                   <div className="text-gray-500 text-base sm:text-2xl md:text-3xl mx-[2px] sm:mx-2 font-light flex-shrink-0">+</div>
-                  <Ball num={draw.bonus} isBonus responsive onClick={() => handleBallClick(draw.bonus)} />
+                  <Ball num={draw.bonus} isBonus responsive onClick={() => void handleDrawBallClick()} />
                 </div>
               </div>
             ))}
           </div>
         </div>
+
+        {/* ── 45labs 회차 분석 리포트 (최근 당첨 번호 클릭 시 표시) ── */}
+        {(reportLoading || reportError !== null || reportHtml !== null) && (
+          <div ref={reportSectionRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-green-900/50 mt-8">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
+              <h2 className="text-xl sm:text-2xl font-bold text-green-300 flex items-center gap-2">
+                <span>📋</span>
+                <span className="break-keep">회차 분석 리포트</span>
+              </h2>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-gray-500">출처: 45labs.kr / 1219회차</span>
+                {reportHtml && (
+                  <button
+                    onClick={() => { setReportHtml(null); setReportError(null); }}
+                    className="text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 px-2 py-1 rounded transition-colors"
+                  >
+                    닫기
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* 로딩 상태 */}
+            {reportLoading && (
+              <div className="flex flex-col items-center justify-center py-16 gap-4">
+                <div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
+                <p className="text-green-400 animate-pulse">45labs.kr 리포트 데이터 수신 중...</p>
+              </div>
+            )}
+
+            {/* 에러 상태 */}
+            {reportError && !reportLoading && (
+              <div className="p-5 rounded-xl bg-red-950/40 border border-red-800/50 text-red-300 space-y-2">
+                <p className="font-bold">리포트를 불러오지 못했습니다.</p>
+                <p className="text-sm text-red-400">{reportError}</p>
+                <p className="text-xs text-gray-500 pt-2">
+                  CORS 또는 원격 서버 오류일 수 있습니다. Vercel 배포 환경에서는 <code>/api/report</code> 프록시가 자동으로 동작합니다.
+                </p>
+                <button
+                  onClick={() => void handleDrawBallClick()}
+                  className="mt-3 px-4 py-2 text-sm bg-red-700/50 hover:bg-red-600/60 rounded-lg transition-colors"
+                >
+                  다시 시도
+                </button>
+              </div>
+            )}
+
+            {/* 파싱된 리포트 HTML 렌더링 */}
+            {reportHtml && !reportLoading && (
+              <div
+                className="report-embed text-gray-200 text-sm leading-relaxed overflow-x-auto"
+                /* 45labs.kr 콘텐츠에서 광고·네비게이션 제거 후 렌더링 */
+                dangerouslySetInnerHTML={{ __html: reportHtml }}
+              />
+            )}
+          </div>
+        )}
 
         {selectedAnalysisNum && repeatAnalysis && (
           <div ref={analysisReportRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/50 mt-8">
