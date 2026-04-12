@@ -62,7 +62,7 @@ const App: React.FC = () => {
   const [quantumApplied, setQuantumApplied] = useState(false);
   const analysisReportRef = useRef<HTMLDivElement>(null);
   const strategyReportRef = useRef<HTMLDivElement>(null);
-  const [expandedDraws, setExpandedDraws] = useState<Set<number>>(new Set());
+  const [expandedDrawRound, setExpandedDrawRound] = useState<number | null>(null);
   const autoInitStartedRef = useRef(false);
   const generatedHistoryRef = useRef<Set<string>>(new Set());
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
@@ -110,7 +110,7 @@ const App: React.FC = () => {
   // setTimeout(0) 은 브라우저 paint 한 프레임 뒤 실행을 보장해 ref 가 항상 유효.
   useEffect(() => {
     // 이제 인라인으로 표시되므로 별도의 스크롤 효과는 필요하지 않습니다.
-  }, [expandedDraws]);
+  }, [expandedDrawRound]);
 
   useEffect(() => {
     if (allData.length === 0 || autoInitStartedRef.current) return;
@@ -252,17 +252,8 @@ const App: React.FC = () => {
   // 선택한 회차 데이터를 기반으로 동적 리포트 생성 및 인라인 출력 (토글).
   // -------------------------------------------------------
   const handleDrawBallClick = (draw: LottoResult) => {
-    // 정밀 분석 리포트는 닫지 않고 유지할 수도 있지만, 요구사항에 맞게 필요하다면 유지합니다.
-    
-    setExpandedDraws((prev) => {
-      const next = new Set(prev);
-      if (next.has(draw.round)) {
-        next.delete(draw.round);
-      } else {
-        next.add(draw.round);
-      }
-      return next;
-    });
+    // 아코디언 동작: 동일 회차를 클릭하면 닫고, 다른 회차를 클릭하면 기존 리포트를 닫고 새 리포트를 엽니다.
+    setExpandedDrawRound((prev) => prev === draw.round ? null : draw.round);
   };
 
   const handleBallClick = (num: number) => {
@@ -540,7 +531,7 @@ const App: React.FC = () => {
           </div>
           <div className="space-y-4">
             {allData.slice(0, 10).map((draw, idx) => {
-              const isExpanded = expandedDraws.has(draw.round);
+              const isExpanded = expandedDrawRound === draw.round;
               const dynamicData = isExpanded ? generateDynamicReportData(draw) : null;
               
               return (
