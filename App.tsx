@@ -66,6 +66,7 @@ const App: React.FC = () => {
   const autoInitStartedRef = useRef(false);
   const generatedHistoryRef = useRef<Set<string>>(new Set());
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   useEffect(() => {
     try {
@@ -193,6 +194,7 @@ const App: React.FC = () => {
 
     setIsGeneratingQuantum(true);
     setGenerationStatus('추출하는 중...');
+    setCopySuccess(false);
 
     await new Promise<void>((resolve) => {
       setTimeout(() => resolve(), 0);
@@ -262,6 +264,39 @@ const App: React.FC = () => {
     setTimeout(() => {
       analysisReportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 100);
+  };
+
+  const handleCopyPredictions = async () => {
+    if (quantumPredictions.length === 0) return;
+    
+    // 두 자리 숫자로 포맷팅 (예: 5 -> "05")
+    const padNum = (n: number) => n.toString().padStart(2, '0');
+    
+    // 각 조합을 공백으로 구분된 문자열로 만들고, 줄바꿈으로 연결
+    const textToCopy = quantumPredictions
+      .map(p => p.numbers.map(padNum).join(' '))
+      .join('\n');
+      
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000); // 2초 후 성공 메시지 원래대로
+    } catch (err) {
+      console.error('클립보드 복사 실패:', err);
+      // Fallback for older browsers
+      const textArea = document.createElement("textarea");
+      textArea.value = textToCopy;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2000);
+      } catch (e) {
+        console.error('Fallback 복사 실패:', e);
+      }
+      document.body.removeChild(textArea);
+    }
   };
 
   // 동적으로 특정 회차의 리포트 데이터를 계산하는 함수
@@ -390,6 +425,18 @@ const App: React.FC = () => {
                 ))}
               </select>
             </div>
+            {quantumPredictions.length > 0 && !isGeneratingQuantum && (
+              <button
+                onClick={() => { void handleCopyPredictions(); }}
+                className={`flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-bold text-sm transition-all duration-300 w-full md:w-auto ${
+                  copySuccess
+                    ? 'bg-green-600 text-white shadow-[0_0_15px_rgba(34,197,94,0.4)]'
+                    : 'bg-gray-800 text-gray-300 border border-gray-600 hover:bg-gray-700 hover:text-white'
+                }`}
+              >
+                {copySuccess ? '✅ 복사 완료!' : '📋 클립보드 복사'}
+              </button>
+            )}
           </div>
 
           <button
