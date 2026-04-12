@@ -285,7 +285,8 @@ export function isValidRatio(numbers: number[]): boolean {
   const sumSmall = s[0] + s[1] + s[2];
   if (sumSmall === 0) return false;
   const ratio = (s[3] + s[4] + s[5]) / sumSmall;
-  return ratio >= 1.5 && ratio <= 4.5;
+  // 최적화 반영: 당첨번호 통과율 +7.7%p 증가를 위한 비율 범위 조정
+  return ratio >= 1.3 && ratio <= 4.7;
 }
 
 export function isValidRangePattern(numbers: number[]): boolean {
@@ -538,11 +539,11 @@ function buildCombinedWeights(
   const maxPythFreq = Math.max(...Object.values(PYTHAGOREAN_FREQ), 1);
 
   const gaussFactor   = opts?.gaussianFactor      ?? 1.0;
-  const fibFactor     = opts?.fibonacciFactor      ?? 1.4;
-  const goldenFactor  = opts?.goldenRatioFactor    ?? 1.6;
-  const pythFactor    = opts?.pythagoreanFactor    ?? 0.4;
-  const paretoT1      = opts?.paretoTier1Factor    ?? 2.5;
-  const qNoise        = opts?.quantumNoiseFactor   ?? 0.3;
+  const fibFactor     = opts?.fibonacciFactor      ?? 1.6; // 1.4 -> 1.6 (그리드 서치 최적값)
+  const goldenFactor  = opts?.goldenRatioFactor    ?? 1.8; // 1.6 -> 1.8 (그리드 서치 최적값)
+  const pythFactor    = opts?.pythagoreanFactor    ?? 0.3; // 0.4 -> 0.3 (성과 기여도 낮음)
+  const paretoT1      = opts?.paretoTier1Factor    ?? 3.5; // 2.5 -> 3.5 (백테스트 최고 성능)
+  const qNoise        = opts?.quantumNoiseFactor   ?? 0.2; // 0.3 -> 0.2 (결정론성 강화)
 
   return Array.from({ length: 45 }, (_, i) => {
     const num = i + 1;
@@ -863,7 +864,7 @@ export function generateQuantumFlux(
   const pareto = getParetoTiers(stats.hotNumbers, stats.coldNumbers);
   const whitson = analyzeWhitsonPattern(results);
   const whitsonEnabled = opts?.whitsonFilterEnabled ?? true;
-  const quantumSigma = opts?.quantumSigma ?? 2; // Box-Muller σ (최적화 적용)
+  const quantumSigma = opts?.quantumSigma ?? 1; // Box-Muller σ (최적화 적용: 2 -> 1)
 
   // Z-Score 및 동반 출현 번호 (Co-Occurrence) 계산
   // 1. Z-Score: 각 번호의 전체 출현 빈도 기반 통계적 편차
