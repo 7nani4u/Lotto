@@ -546,10 +546,9 @@ const App: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
               <h2 className="text-xl sm:text-2xl font-bold text-green-300 flex items-center gap-2">
                 <span>📋</span>
-                <span className="break-keep">회차 분석 리포트</span>
+                <span className="break-keep">제 {REPORT_1219_DATA.round}회 당첨 번호 분석 리포트</span>
               </h2>
               <div className="flex items-center gap-3">
-                <span className="text-xs text-gray-500">출처: 45labs.kr / {REPORT_1219_DATA.round}회차</span>
                 <button
                   onClick={() => { setReportOpen(false); }}
                   className="text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 px-2 py-1 rounded transition-colors"
@@ -568,10 +567,10 @@ const App: React.FC = () => {
                 </div>
                 <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
                   {REPORT_1219_DATA.numbers.map(num => (
-                    <Ball key={num} num={num} />
+                    <Ball key={num} num={num} onClick={() => handleBallClick(num)} />
                   ))}
                   <div className="text-gray-500 text-2xl mx-1 font-light">+</div>
-                  <Ball num={REPORT_1219_DATA.bonus} isBonus />
+                  <Ball num={REPORT_1219_DATA.bonus} isBonus onClick={() => handleBallClick(REPORT_1219_DATA.bonus)} />
                 </div>
               </div>
 
@@ -656,7 +655,7 @@ const App: React.FC = () => {
                     <div className="text-xs text-gray-400 mb-2">이전 회차 번호</div>
                     <div className="flex gap-2 flex-wrap">
                       {REPORT_1219_DATA.sections.prevCompare.prevNumbers.map(n => (
-                        <Ball key={`prev-${n}`} num={n} small />
+                        <Ball key={`prev-${n}`} num={n} small onClick={() => handleBallClick(n)} />
                       ))}
                     </div>
                   </div>
@@ -665,7 +664,7 @@ const App: React.FC = () => {
                       <div className="text-xs text-gray-400 mb-2">재등장 ({REPORT_1219_DATA.sections.prevCompare.reappeared.length}개)</div>
                       <div className="flex gap-2 flex-wrap">
                         {REPORT_1219_DATA.sections.prevCompare.reappeared.map(n => (
-                          <Ball key={`re-${n}`} num={n} small />
+                          <Ball key={`re-${n}`} num={n} small onClick={() => handleBallClick(n)} />
                         ))}
                       </div>
                     </div>
@@ -673,7 +672,7 @@ const App: React.FC = () => {
                       <div className="text-xs text-gray-400 mb-2">신규 ({REPORT_1219_DATA.sections.prevCompare.newNumbers.length}개)</div>
                       <div className="flex gap-2 flex-wrap">
                         {REPORT_1219_DATA.sections.prevCompare.newNumbers.map(n => (
-                          <Ball key={`new-${n}`} num={n} small />
+                          <Ball key={`new-${n}`} num={n} small onClick={() => handleBallClick(n)} />
                         ))}
                       </div>
                     </div>
@@ -693,9 +692,9 @@ const App: React.FC = () => {
                         {idx + 1}
                       </span>
                       <div className="flex items-center gap-1">
-                        <Ball num={item.pair[0]} small />
+                        <Ball num={item.pair[0]} small onClick={() => handleBallClick(item.pair[0])} />
                         <span className="text-gray-500 text-xs mx-1">+</span>
-                        <Ball num={item.pair[1]} small />
+                        <Ball num={item.pair[1]} small onClick={() => handleBallClick(item.pair[1])} />
                       </div>
                       <div className="ml-auto text-right">
                         <div className="text-sm font-bold text-white">{item.count}회</div>
