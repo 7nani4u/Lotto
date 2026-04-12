@@ -18,6 +18,38 @@ import { LottoResult, PredictionResult } from './types';
 
 const GENERATED_HISTORY_KEY = 'lottoQuantumGeneratedHistoryV1';
 
+const REPORT_1219_DATA = {
+  round: 1219,
+  date: '2026년 4월 11일',
+  numbers: [1, 2, 15, 28, 39, 45],
+  bonus: 31,
+  sections: {
+    distribution: [
+      { range: '1~10', count: 2 },
+      { range: '11~20', count: 1 },
+      { range: '21~30', count: 1 },
+      { range: '31~40', count: 1 },
+      { range: '41~45', count: 1 },
+    ],
+    oddEven: { odd: 4, even: 2 },
+    highLow: { low: 3, high: 3, lowRange: '1-22', highRange: '23-45' },
+    sum: { total: 130, average: 139.4, deviation: -9.4, min: 100, max: 175 },
+    prevCompare: {
+      prevRound: 1218,
+      prevNumbers: [3, 28, 31, 32, 42, 45],
+      reappeared: [28, 45],
+      newNumbers: [1, 2, 15, 39],
+    },
+    frequentPairs: [
+      { pair: [1, 28], count: 30, percentage: 2.5 },
+      { pair: [1, 2], count: 24, percentage: 2.0 },
+      { pair: [39, 45], count: 23, percentage: 1.9 },
+      { pair: [2, 15], count: 23, percentage: 1.9 },
+      { pair: [2, 28], count: 21, percentage: 1.7 },
+    ]
+  }
+};
+
 const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; small?: boolean; responsive?: boolean }> = ({
   num,
   isBonus,
@@ -64,9 +96,6 @@ const App: React.FC = () => {
   const strategyReportRef = useRef<HTMLDivElement>(null);
   const reportSectionRef = useRef<HTMLDivElement>(null);
   const [reportOpen, setReportOpen] = useState(false);       // 섹션 표시 여부
-  const [reportHtml, setReportHtml] = useState<string | null>(null);
-  const [reportLoading, setReportLoading] = useState(false);
-  const [reportError, setReportError] = useState<string | null>(null);
   const autoInitStartedRef = useRef(false);
   const generatedHistoryRef = useRef<Set<string>>(new Set());
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
@@ -256,103 +285,23 @@ const App: React.FC = () => {
   };
 
   // -------------------------------------------------------
-  // 45labs.kr HTML에서 불필요한 섹션 · 요소를 제거하고
-  // 렌더링 가능한 정제 HTML 문자열을 반환한다.
-  // -------------------------------------------------------
-  const parseReportHtml = (rawHtml: string): string => {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(rawHtml, 'text/html');
-
-    // 스크립트 · 스타일 · iframe · 폼 제거
-    doc.querySelectorAll('script, style, iframe, form, noscript').forEach(el => el.remove());
-
-    // nav / header / footer 제거
-    doc.querySelectorAll('nav, header, footer').forEach(el => el.remove());
-
-    // 버튼 제거
-    doc.querySelectorAll('button').forEach(el => el.remove());
-
-    // 외부 링크를 span으로 대체 (광고·공유 버튼 방지)
-    doc.querySelectorAll<HTMLAnchorElement>('a[href^="http"]').forEach(anchor => {
-      const span = doc.createElement('span');
-      span.textContent = anchor.textContent;
-      span.className = anchor.className;
-      anchor.replaceWith(span);
-    });
-
-    // "번호별 상세 분석" · "당첨금 정보" 섹션 제거
-    // 해당 제목이 포함된 헤딩을 찾아 가장 가까운 상위 컨테이너를 삭제
-    const EXCLUDED_SECTIONS = ['번호별 상세 분석', '당첨금 정보'];
-    doc.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(heading => {
-      const text = heading.textContent?.trim() ?? '';
-      if (EXCLUDED_SECTIONS.some(kw => text.includes(kw))) {
-        // 섹션 래퍼(section, article, div[class]) 단위로 올라가며 제거
-        let target: Element | null = heading;
-        for (let i = 0; i < 4; i++) {
-          const parent = target?.parentElement;
-          if (!parent) break;
-          const tag = parent.tagName.toLowerCase();
-          if (tag === 'section' || tag === 'article' || (tag === 'div' && parent.className)) {
-            target = parent;
-            break;
-          }
-          target = parent;
-        }
-        target?.remove();
-      }
-    });
-
-    // 광고 패턴 클래스 제거 (ad, banner, popup, cookie 등)
-    const AD_PATTERN = /ad[s_-]?|banner|popup|cookie|toast|modal|overlay|sidebar/i;
-    doc.querySelectorAll('[class]').forEach(el => {
-      if (AD_PATTERN.test((el as HTMLElement).className)) el.remove();
-    });
-
-    // 메인 콘텐츠 추출 우선순위: main > article > .content > #content > body
-    const main =
-      doc.querySelector('main') ??
-      doc.querySelector('article') ??
-      doc.querySelector('[class*="content"]') ??
-      doc.querySelector('#content') ??
-      doc.body;
-
-    return main?.innerHTML ?? '';
-  };
-
-  // -------------------------------------------------------
   // "최근 당첨 번호" 섹션의 공 클릭 시 호출.
-  // 클릭한 번호와 무관하게 항상 동일한 45labs 리포트 출력.
+  // 클릭한 번호와 무관하게 항상 동일한 45labs 리포트(1219회 데이터) 출력.
   // 이미 로드된 경우 재요청 없이 스크롤만 이동.
   // -------------------------------------------------------
   const handleDrawBallClick = async () => {
+    // 다른 리포트 닫기
+    setSelectedAnalysisNum(null);
+    
     // reportOpen 을 true 로 설정 → 섹션이 DOM 에 mount 됨
     // → useEffect 가 DOM commit 후 scrollIntoView 를 호출
     setReportOpen(true);
-
-    // 이미 HTML 이 로드된 경우 fetch 없이 스크롤만 진행
-    if (reportHtml) return;
-
-    setReportLoading(true);
-    setReportError(null);
-    try {
-      const res = await fetch('/api/report');
-      // 응답이 JSON 이 아닐 경우(예: 404 HTML) 별도 처리
-      const contentType = res.headers.get('content-type') ?? '';
-      if (!contentType.includes('application/json')) {
-        throw new Error(`서버 응답 오류 (HTTP ${res.status})`);
-      }
-      const data = await res.json() as { html?: string; error?: string; detail?: string };
-      if (!res.ok || data.error) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
-      }
-      setReportHtml(parseReportHtml(data.html ?? ''));
-    } catch (e) {
-      setReportError(e instanceof Error ? e.message : '리포트를 불러오지 못했습니다.');
-    }
-    setReportLoading(false);
   };
 
   const handleBallClick = (num: number) => {
+    // 다른 리포트 닫기
+    setReportOpen(false);
+
     setSelectedAnalysisNum(num);
     setRepeatAnalysis(analyzeRepeatProbability(allData, num, 100));
     setTimeout(() => {
@@ -593,16 +542,16 @@ const App: React.FC = () => {
         {/* ── 45labs 회차 분석 리포트 (최근 당첨 번호 클릭 시 표시) ── */}
         {/* reportOpen 이 true 가 된 직후 DOM mount → useEffect 에서 스크롤 */}
         {reportOpen && (
-          <div ref={reportSectionRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-green-900/50 mt-8">
+          <div ref={reportSectionRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-green-900/50 mt-8 animate-fade-in">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
               <h2 className="text-xl sm:text-2xl font-bold text-green-300 flex items-center gap-2">
                 <span>📋</span>
                 <span className="break-keep">회차 분석 리포트</span>
               </h2>
               <div className="flex items-center gap-3">
-                <span className="text-xs text-gray-500">출처: 45labs.kr / 1219회차</span>
+                <span className="text-xs text-gray-500">출처: 45labs.kr / {REPORT_1219_DATA.round}회차</span>
                 <button
-                  onClick={() => { setReportOpen(false); setReportHtml(null); setReportError(null); }}
+                  onClick={() => { setReportOpen(false); }}
                   className="text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 px-2 py-1 rounded transition-colors"
                 >
                   닫기
@@ -610,39 +559,157 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* 로딩 상태 */}
-            {reportLoading && (
-              <div className="flex flex-col items-center justify-center py-16 gap-4">
-                <div className="w-10 h-10 border-4 border-green-500 border-t-transparent rounded-full animate-spin" />
-                <p className="text-green-400 animate-pulse">45labs.kr 리포트 데이터 수신 중...</p>
+            <div className="space-y-6 text-gray-200">
+              {/* 1. 당첨 번호 요약 */}
+              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
+                <div className="text-center mb-4">
+                  <div className="text-sm text-gray-400 mb-1">{REPORT_1219_DATA.date}</div>
+                  <div className="text-2xl font-black text-white">제 {REPORT_1219_DATA.round}회 당첨 번호</div>
+                </div>
+                <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
+                  {REPORT_1219_DATA.numbers.map(num => (
+                    <Ball key={num} num={num} />
+                  ))}
+                  <div className="text-gray-500 text-2xl mx-1 font-light">+</div>
+                  <Ball num={REPORT_1219_DATA.bonus} isBonus />
+                </div>
               </div>
-            )}
 
-            {/* 에러 상태 */}
-            {reportError && !reportLoading && (
-              <div className="p-5 rounded-xl bg-red-950/40 border border-red-800/50 text-red-300 space-y-2">
-                <p className="font-bold">리포트를 불러오지 못했습니다.</p>
-                <p className="text-sm text-red-400">{reportError}</p>
-                <p className="text-xs text-gray-500 pt-2">
-                  CORS 또는 원격 서버 오류일 수 있습니다. Vercel 배포 환경에서는 <code>/api/report</code> 프록시가 자동으로 동작합니다.
-                </p>
-                <button
-                  onClick={() => { setReportError(null); void handleDrawBallClick(); }}
-                  className="mt-3 px-4 py-2 text-sm bg-red-700/50 hover:bg-red-600/60 rounded-lg transition-colors"
-                >
-                  다시 시도
-                </button>
+              {/* 2. 구간 분포 & 홀짝/고저 */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
+                  <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+                    <span>📊</span> 구간 분포
+                  </h3>
+                  <div className="space-y-3">
+                    {REPORT_1219_DATA.sections.distribution.map((item, idx) => (
+                      <div key={idx} className="flex items-center gap-3">
+                        <span className="text-xs text-gray-400 w-12 text-right">{item.range}</span>
+                        <div className="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-green-500 rounded-full"
+                            style={{ width: `${(item.count / 2) * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-sm font-bold text-white w-6">{item.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
+                  <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+                    <span>⚖️</span> 홀짝 · 고저
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-gray-800 p-3 rounded-lg text-center">
+                      <div className="text-xs text-gray-400 mb-1">홀짝 비율</div>
+                      <div className="text-xl font-black text-blue-300">
+                        {REPORT_1219_DATA.sections.oddEven.odd} : {REPORT_1219_DATA.sections.oddEven.even}
+                      </div>
+                    </div>
+                    <div className="bg-gray-800 p-3 rounded-lg text-center">
+                      <div className="text-xs text-gray-400 mb-1">고저 비율</div>
+                      <div className="text-xl font-black text-purple-300">
+                        {REPORT_1219_DATA.sections.highLow.low} : {REPORT_1219_DATA.sections.highLow.high}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 text-xs text-gray-500 text-center">
+                    저({REPORT_1219_DATA.sections.highLow.lowRange}) / 고({REPORT_1219_DATA.sections.highLow.highRange})
+                  </div>
+                </div>
               </div>
-            )}
 
-            {/* 파싱된 리포트 HTML 렌더링 */}
-            {reportHtml && !reportLoading && (
-              <div
-                className="report-embed text-gray-200 text-sm leading-relaxed overflow-x-auto"
-                /* 45labs.kr 콘텐츠에서 광고·네비게이션 제거 후 렌더링 */
-                dangerouslySetInnerHTML={{ __html: reportHtml }}
-              />
-            )}
+              {/* 3. 번호 합계 */}
+              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <span>➕</span>
+                  <span className="text-sm font-bold text-gray-300">번호 합계</span>
+                </div>
+                <div className="flex items-center gap-6">
+                  <div className="text-center">
+                    <div className="text-xs text-gray-400">합계</div>
+                    <div className="text-xl font-black text-white">{REPORT_1219_DATA.sections.sum.total}</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-xs text-gray-400">이론 평균</div>
+                    <div className="text-lg font-bold text-gray-300">{REPORT_1219_DATA.sections.sum.average}</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-xs text-gray-400">편차</div>
+                    <div className={`text-lg font-bold ${REPORT_1219_DATA.sections.sum.deviation < 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                      {REPORT_1219_DATA.sections.sum.deviation}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. 이전 회차 비교 */}
+              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
+                <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+                  <span>🔄</span> 이전 회차 비교
+                  <span className="text-xs text-gray-500 font-normal ml-2">({REPORT_1219_DATA.sections.prevCompare.prevRound}회 → {REPORT_1219_DATA.round}회)</span>
+                </h3>
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-xs text-gray-400 mb-2">이전 회차 번호</div>
+                    <div className="flex gap-2 flex-wrap">
+                      {REPORT_1219_DATA.sections.prevCompare.prevNumbers.map(n => (
+                        <Ball key={`prev-${n}`} num={n} small />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                    <div className="bg-gray-800 p-3 rounded-lg">
+                      <div className="text-xs text-gray-400 mb-2">재등장 ({REPORT_1219_DATA.sections.prevCompare.reappeared.length}개)</div>
+                      <div className="flex gap-2 flex-wrap">
+                        {REPORT_1219_DATA.sections.prevCompare.reappeared.map(n => (
+                          <Ball key={`re-${n}`} num={n} small />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-gray-800 p-3 rounded-lg">
+                      <div className="text-xs text-gray-400 mb-2">신규 ({REPORT_1219_DATA.sections.prevCompare.newNumbers.length}개)</div>
+                      <div className="flex gap-2 flex-wrap">
+                        {REPORT_1219_DATA.sections.prevCompare.newNumbers.map(n => (
+                          <Ball key={`new-${n}`} num={n} small />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 5. 함께 자주 나온 쌍 Top 5 */}
+              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
+                <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+                  <span>🔗</span> 함께 자주 나온 쌍 Top 5
+                </h3>
+                <div className="space-y-3">
+                  {REPORT_1219_DATA.sections.frequentPairs.map((item, idx) => (
+                    <div key={idx} className="flex items-center gap-3 p-2 hover:bg-gray-800 rounded-lg transition-colors">
+                      <span className={`text-xs font-bold w-4 text-center ${idx < 3 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                        {idx + 1}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Ball num={item.pair[0]} small />
+                        <span className="text-gray-500 text-xs mx-1">+</span>
+                        <Ball num={item.pair[1]} small />
+                      </div>
+                      <div className="ml-auto text-right">
+                        <div className="text-sm font-bold text-white">{item.count}회</div>
+                        <div className="text-xs text-gray-400">({item.percentage.toFixed(1)}%)</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="text-center text-xs text-gray-500 pt-4">
+                로또는 예측 불가합니다. 본 서비스의 분석 및 추천은 통계 참고 자료이며 당첨을 보장하지 않습니다.
+              </div>
+            </div>
           </div>
         )}
 
