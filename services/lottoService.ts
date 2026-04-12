@@ -269,7 +269,8 @@ export function isValidAC(numbers: number[]): boolean {
   for (let i = 0; i < numbers.length; i++)
     for (let j = i + 1; j < numbers.length; j++)
       differences.add(Math.abs(numbers[i] - numbers[j]));
-  return differences.size - 5 >= 7;
+  const ac = differences.size - 5;
+  return ac >= 5 && ac <= 10;
 }
 
 export function isValidSum46(numbers: number[]): boolean {
@@ -285,8 +286,8 @@ export function isValidRatio(numbers: number[]): boolean {
   const sumSmall = s[0] + s[1] + s[2];
   if (sumSmall === 0) return false;
   const ratio = (s[3] + s[4] + s[5]) / sumSmall;
-  // 최적화 반영: 당첨번호 통과율 +7.7%p 증가를 위한 비율 범위 조정
-  return ratio >= 1.3 && ratio <= 4.7;
+  // 최적화 반영: 01 02 15 28 39 45 등 편차가 큰 조합도 통과되도록 상한선을 7.5로 확대
+  return ratio >= 1.3 && ratio <= 7.5;
 }
 
 export function isValidRangePattern(numbers: number[]): boolean {
@@ -301,9 +302,11 @@ export function isValidConsecutive(numbers: number[]): boolean {
   for (let i = 0; i < sorted.length - 1; i++) {
     if (sorted[i] + 1 === sorted[i + 1]) {
       pairs++;
+      // 3연속(예: 1,2,3) 이상은 허용하지 않음
       if (i < sorted.length - 2 && sorted[i] + 2 === sorted[i + 2]) return false;
     }
   }
+  // 2연번 쌍이 최대 2개까지만 허용됨 (예: 1,2 와 10,11)
   return pairs <= 2;
 }
 
