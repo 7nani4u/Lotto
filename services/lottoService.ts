@@ -865,7 +865,37 @@ export function generateQuantumFlux(
   const whitsonEnabled = opts?.whitsonFilterEnabled ?? true;
   const quantumSigma = opts?.quantumSigma ?? 2; // Box-Muller σ (최적화 적용)
 
-  const methodLabels = ['피타고라스 비율', '피보나치/황금비(φ)', '가우스 정규분포', 'Pareto 80/20', 'Whitson 패턴법칙', '양자 요동 노이즈'];
+  // Z-Score 및 동반 출현 번호 (Co-Occurrence) 계산
+  // 1. Z-Score: 각 번호의 전체 출현 빈도 기반 통계적 편차
+  const { frequencies } = stats;
+  const freqValues = Object.values(frequencies);
+  const freqMean = freqValues.reduce((a, b) => a + b, 0) / freqValues.length;
+  const freqStdDev = Math.sqrt(freqValues.reduce((s, v) => s + Math.pow(v - freqMean, 2), 0) / freqValues.length) || 1;
+  const zScores: Record<number, number> = {};
+  for (let i = 1; i <= 45; i++) {
+    zScores[i] = (frequencies[i] - freqMean) / freqStdDev;
+  }
+
+  // 2. 동반 출현 번호 (Co-Occurrence) 가중치 행렬 계산
+  // 특정 번호가 나왔을 때 함께 잘 나오는 번호들에 가산점을 주기 위한 행렬
+  const coOccurrence: Record<number, Record<number, number>> = {};
+  for (let i = 1; i <= 45; i++) {
+    coOccurrence[i] = {};
+    for (let j = 1; j <= 45; j++) {
+      coOccurrence[i][j] = 0;
+    }
+  }
+  results.forEach(draw => {
+    const nums = draw.numbers;
+    for (let i = 0; i < nums.length; i++) {
+      for (let j = i + 1; j < nums.length; j++) {
+        coOccurrence[nums[i]][nums[j]]++;
+        coOccurrence[nums[j]][nums[i]]++;
+      }
+    }
+  });
+
+  const methodLabels = ['피타고라스 비율', '피보나치/황금비(φ)', '가우스 정규분포', 'Pareto 80/20', 'Whitson 패턴법칙', '양자 요동 노이즈', 'Z-Score 보정', '동반출현(Co-Occurrence) 시너지'];
   const optimizedTag = opts ? ['[최적화 가중치 적용]'] : [];
 
   // 경로 A: GitHub 조합 가중 스코어링
@@ -888,7 +918,31 @@ export function generateQuantumFlux(
   let attempts = 2000;
   while (attempts > 0) {
     const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts);
+    
+    // Z-Score 보정: 과도하게 적게 나오거나(Z < -1.5) 과도하게 많이 나온(Z > 1.5) 번호의 가중치를 미세 조정
+    for (let i = 0; i < 45; i++) {
+      const z = zScores[i + 1];
+      if (z > 1.5) weights[i] *= 0.85; // 너무 많이 나온 번호는 억제
+      else if (z < -1.5) weights[i] *= 1.15; // 너무 안 나온 번호는 약간의 가산점 (회귀 기대)
+    }
+
     let candidates = weightedRandomSelect(weights, 6);
+
+    // 동반 출현 시너지 보정: 선택된 6개의 번호 간의 동반 출현 점수를 계산하여 기준 미달이면 다시 뽑기
+    // 전체 쌍(15개)의 평균 동반 출현 횟수가 전체 회차 대비 일정 비율 이상이어야 함
+    let coOccurrenceScore = 0;
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        coOccurrenceScore += coOccurrence[candidates[i]][candidates[j]];
+      }
+    }
+    // 동반 출현 점수가 너무 낮으면 (서로 전혀 안 어울리는 번호들만 모였을 경우) 패스
+    const avgCoOccurrence = coOccurrenceScore / 15;
+    const minCoOccurrence = results.length * 0.015; // 전체 데이터의 1.5% 정도는 동반 출현한 경험이 있어야 함
+    if (avgCoOccurrence < minCoOccurrence) {
+      attempts--;
+      continue;
+    }
 
     if (attempts % 4 === 0) {
       candidates = candidates.map(n => applyQuantumFluctuation(n, quantumSigma));
