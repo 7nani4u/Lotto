@@ -442,11 +442,6 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="mt-4 p-4 bg-gray-800/50 rounded-lg border border-gray-700/50 text-sm text-gray-300 text-left">
-                    <span className="font-bold text-gray-400 mr-2">적용된 알고리즘:</span>
-                    {prediction.formulasUsed.join(', ')}
-                  </div>
-
                 </div>
               ))}
             </div>
