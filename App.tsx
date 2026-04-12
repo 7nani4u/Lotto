@@ -18,38 +18,6 @@ import { LottoResult, PredictionResult } from './types';
 
 const GENERATED_HISTORY_KEY = 'lottoQuantumGeneratedHistoryV1';
 
-const REPORT_1219_DATA = {
-  round: 1219,
-  date: '2026년 4월 11일',
-  numbers: [1, 2, 15, 28, 39, 45],
-  bonus: 31,
-  sections: {
-    distribution: [
-      { range: '1~10', count: 2 },
-      { range: '11~20', count: 1 },
-      { range: '21~30', count: 1 },
-      { range: '31~40', count: 1 },
-      { range: '41~45', count: 1 },
-    ],
-    oddEven: { odd: 4, even: 2 },
-    highLow: { low: 3, high: 3, lowRange: '1-22', highRange: '23-45' },
-    sum: { total: 130, average: 139.4, deviation: -9.4, min: 100, max: 175 },
-    prevCompare: {
-      prevRound: 1218,
-      prevNumbers: [3, 28, 31, 32, 42, 45],
-      reappeared: [28, 45],
-      newNumbers: [1, 2, 15, 39],
-    },
-    frequentPairs: [
-      { pair: [1, 28], count: 30, percentage: 2.5 },
-      { pair: [1, 2], count: 24, percentage: 2.0 },
-      { pair: [39, 45], count: 23, percentage: 1.9 },
-      { pair: [2, 15], count: 23, percentage: 1.9 },
-      { pair: [2, 28], count: 21, percentage: 1.7 },
-    ]
-  }
-};
-
 const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; small?: boolean; responsive?: boolean }> = ({
   num,
   isBonus,
@@ -95,7 +63,7 @@ const App: React.FC = () => {
   const analysisReportRef = useRef<HTMLDivElement>(null);
   const strategyReportRef = useRef<HTMLDivElement>(null);
   const reportSectionRef = useRef<HTMLDivElement>(null);
-  const [reportOpen, setReportOpen] = useState(false);       // 섹션 표시 여부
+  const [selectedReportDraw, setSelectedReportDraw] = useState<LottoResult | null>(null);
   const autoInitStartedRef = useRef(false);
   const generatedHistoryRef = useRef<Set<string>>(new Set());
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
@@ -142,12 +110,12 @@ const App: React.FC = () => {
   // reportOpen 이 true 로 바뀐 뒤 React 가 DOM 을 commit 한 다음 스크롤.
   // setTimeout(0) 은 브라우저 paint 한 프레임 뒤 실행을 보장해 ref 가 항상 유효.
   useEffect(() => {
-    if (!reportOpen) return;
+    if (!selectedReportDraw) return;
     const id = setTimeout(() => {
       reportSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 0);
     return () => clearTimeout(id);
-  }, [reportOpen]);
+  }, [selectedReportDraw]);
 
   useEffect(() => {
     if (allData.length === 0 || autoInitStartedRef.current) return;
@@ -285,29 +253,24 @@ const App: React.FC = () => {
   };
 
   // -------------------------------------------------------
-  // "최근 당첨 번호" 섹션의 공 클릭 시 호출.
-  // 클릭한 번호와 무관하게 항상 동일한 45labs 리포트(1219회 데이터) 출력.
-  // 이미 로드된 경우 재요청 없이 스크롤만 이동.
+  // "최근 당첨 번호" 섹션의 행 클릭 시 호출.
+  // 선택한 회차 데이터를 기반으로 동적 리포트 생성 및 출력.
   // -------------------------------------------------------
-  const handleDrawBallClick = async () => {
+  const handleDrawBallClick = (draw: LottoResult) => {
     // 다른 리포트 닫기
     setSelectedAnalysisNum(null);
     
-    // 이미 열려있으면 다시 스크롤만 진행하기 위해,
-    // false 로 잠깐 바꿨다가 true 로 변경하여 DOM 재렌더링 유도
-    if (reportOpen) {
-      setReportOpen(false);
-      setTimeout(() => {
-        setReportOpen(true);
-      }, 50);
+    if (selectedReportDraw?.round === draw.round) {
+      setSelectedReportDraw(null);
+      setTimeout(() => setSelectedReportDraw(draw), 50);
     } else {
-      setReportOpen(true);
+      setSelectedReportDraw(draw);
     }
   };
 
   const handleBallClick = (num: number) => {
     // 다른 리포트 닫기
-    setReportOpen(false);
+    setSelectedReportDraw(null);
 
     setSelectedAnalysisNum(num);
     setRepeatAnalysis(analyzeRepeatProbability(allData, num, 100));
@@ -315,6 +278,82 @@ const App: React.FC = () => {
       analysisReportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 100);
   };
+
+  const generateDynamicReportData = useMemo(() => {
+    if (!selectedReportDraw) return null;
+
+    const draw = selectedReportDraw;
+    const nums = draw.numbers;
+
+    // 1. 구간 분포 계산
+    const distribution = [
+      { range: '1~10', count: nums.filter(n => n >= 1 && n <= 10).length },
+      { range: '11~20', count: nums.filter(n => n >= 11 && n <= 20).length },
+      { range: '21~30', count: nums.filter(n => n >= 21 && n <= 30).length },
+      { range: '31~40', count: nums.filter(n => n >= 31 && n <= 40).length },
+      { range: '41~45', count: nums.filter(n => n >= 41 && n <= 45).length },
+    ];
+
+    // 2. 홀짝 / 고저 계산
+    const odd = nums.filter(n => n % 2 !== 0).length;
+    const even = nums.filter(n => n % 2 === 0).length;
+    const low = nums.filter(n => n <= 22).length;
+    const high = nums.filter(n => n > 22).length;
+
+    // 3. 번호 합계
+    const sumTotal = nums.reduce((a, b) => a + b, 0);
+    const average = 139.4; // 이론적 평균
+    const deviation = +(sumTotal - average).toFixed(1);
+
+    // 4. 이전 회차 비교
+    const prevDrawIndex = allData.findIndex(d => d.round === draw.round - 1);
+    const prevDraw = prevDrawIndex !== -1 ? allData[prevDrawIndex] : null;
+    let prevNumbers: number[] = [];
+    let reappeared: number[] = [];
+    let newNumbers: number[] = [...nums];
+
+    if (prevDraw) {
+      prevNumbers = prevDraw.numbers;
+      reappeared = nums.filter(n => prevNumbers.includes(n));
+      newNumbers = nums.filter(n => !prevNumbers.includes(n));
+    }
+
+    // 5. 함께 자주 나온 쌍 (간단한 예시를 위해 해당 회차 번호들의 전체 동반 출현 빈도를 분석)
+    // 실제로는 전체 데이터를 순회해야 하지만 성능상 현재는 정적 데이터 또는 단순화된 데이터를 사용하거나
+    // 이전 분석 로직을 활용할 수 있습니다. 여기서는 1219회 데이터 구조와 호환되게 동적으로 계산합니다.
+    const pairs = [];
+    for (let i = 0; i < nums.length; i++) {
+      for (let j = i + 1; j < nums.length; j++) {
+        const pair = [nums[i], nums[j]].sort((a, b) => a - b);
+        let count = 0;
+        allData.forEach(d => {
+          if (d.numbers.includes(pair[0]) && d.numbers.includes(pair[1])) count++;
+        });
+        pairs.push({ pair, count, percentage: +((count / allData.length) * 100).toFixed(1) });
+      }
+    }
+    const frequentPairs = pairs.sort((a, b) => b.count - a.count).slice(0, 5);
+
+    return {
+      round: draw.round,
+      date: draw.date,
+      numbers: nums,
+      bonus: draw.bonus,
+      sections: {
+        distribution,
+        oddEven: { odd, even },
+        highLow: { low, high, lowRange: '1-22', highRange: '23-45' },
+        sum: { total: sumTotal, average, deviation, min: 100, max: 175 },
+        prevCompare: {
+          prevRound: draw.round - 1,
+          prevNumbers,
+          reappeared,
+          newNumbers,
+        },
+        frequentPairs,
+      }
+    };
+  }, [selectedReportDraw, allData]);
 
   if (loading) {
     return (
@@ -499,7 +538,7 @@ const App: React.FC = () => {
         </div>
 
         {/* ── 최근 당첨 번호 ── */}
-        {/* 행의 번호 외 영역(회차·날짜·배경) 클릭 → 45labs 리포트 출력  */}
+        {/* 행의 번호 외 영역(회차·날짜·배경) 클릭 → 회차 리포트 출력  */}
         {/* 번호(공) 클릭 → 기존 선택 번호 정밀 분석 리포트 (stopPropagation) */}
         <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-gray-700 mt-8">
           <div className="flex flex-col md:flex-row items-center justify-between border-b border-gray-700 pb-4 mb-6">
@@ -512,11 +551,11 @@ const App: React.FC = () => {
           </div>
           <div className="space-y-4">
             {allData.slice(0, 10).map((draw, idx) => (
-              // 행 전체 클릭 → 45labs 리포트
+              // 행 전체 클릭 → 회차 리포트
               <div
                 key={idx}
                 className="flex flex-col md:flex-row items-center justify-between bg-gray-900 p-4 sm:p-5 rounded-xl border border-gray-700 hover:border-green-700/60 transition-colors cursor-pointer"
-                onClick={() => void handleDrawBallClick()}
+                onClick={() => handleDrawBallClick(draw)}
               >
                 {/* 회차·날짜 영역: 클릭 시 리포트 (부모 onClick 그대로 전파) */}
                 <div className="text-center md:text-left mb-4 md:mb-0 w-32 flex-shrink-0 select-none">
@@ -546,18 +585,18 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* ── 45labs 회차 분석 리포트 (최근 당첨 번호 클릭 시 표시) ── */}
+        {/* ── 회차 분석 리포트 (최근 당첨 번호 클릭 시 표시) ── */}
         {/* reportOpen 이 true 가 된 직후 DOM mount → useEffect 에서 스크롤 */}
-        {reportOpen && (
+        {selectedReportDraw && generateDynamicReportData && (
           <div ref={reportSectionRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-green-900/50 mt-8 animate-fade-in">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
               <h2 className="text-xl sm:text-2xl font-bold text-green-300 flex items-center gap-2">
                 <span>📋</span>
-                <span className="break-keep">제 {REPORT_1219_DATA.round}회 당첨 번호 분석 리포트</span>
+                <span className="break-keep">제 {generateDynamicReportData.round}회 당첨 번호 분석 리포트</span>
               </h2>
               <div className="flex items-center gap-3">
                 <button
-                  onClick={() => { setReportOpen(false); }}
+                  onClick={() => { setSelectedReportDraw(null); }}
                   className="text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 px-2 py-1 rounded transition-colors"
                 >
                   닫기
@@ -569,15 +608,15 @@ const App: React.FC = () => {
               {/* 1. 당첨 번호 요약 */}
               <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
                 <div className="text-center mb-4">
-                  <div className="text-sm text-gray-400 mb-1">{REPORT_1219_DATA.date}</div>
-                  <div className="text-2xl font-black text-white">제 {REPORT_1219_DATA.round}회 당첨 번호</div>
+                  <div className="text-sm text-gray-400 mb-1">{generateDynamicReportData.date}</div>
+                  <div className="text-2xl font-black text-white">제 {generateDynamicReportData.round}회 당첨 번호</div>
                 </div>
                 <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
-                  {REPORT_1219_DATA.numbers.map(num => (
+                  {generateDynamicReportData.numbers.map(num => (
                     <Ball key={num} num={num} onClick={() => handleBallClick(num)} />
                   ))}
                   <div className="text-gray-500 text-2xl mx-1 font-light">+</div>
-                  <Ball num={REPORT_1219_DATA.bonus} isBonus onClick={() => handleBallClick(REPORT_1219_DATA.bonus)} />
+                  <Ball num={generateDynamicReportData.bonus} isBonus onClick={() => handleBallClick(generateDynamicReportData.bonus)} />
                 </div>
               </div>
 
@@ -588,7 +627,7 @@ const App: React.FC = () => {
                     <span>📊</span> 구간 분포
                   </h3>
                   <div className="space-y-3">
-                    {REPORT_1219_DATA.sections.distribution.map((item, idx) => (
+                    {generateDynamicReportData.sections.distribution.map((item, idx) => (
                       <div key={idx} className="flex items-center gap-3">
                         <span className="text-xs text-gray-400 w-12 text-right">{item.range}</span>
                         <div className="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
@@ -611,18 +650,18 @@ const App: React.FC = () => {
                     <div className="bg-gray-800 p-3 rounded-lg text-center">
                       <div className="text-xs text-gray-400 mb-1">홀짝 비율</div>
                       <div className="text-xl font-black text-blue-300">
-                        {REPORT_1219_DATA.sections.oddEven.odd} : {REPORT_1219_DATA.sections.oddEven.even}
+                        {generateDynamicReportData.sections.oddEven.odd} : {generateDynamicReportData.sections.oddEven.even}
                       </div>
                     </div>
                     <div className="bg-gray-800 p-3 rounded-lg text-center">
                       <div className="text-xs text-gray-400 mb-1">고저 비율</div>
                       <div className="text-xl font-black text-purple-300">
-                        {REPORT_1219_DATA.sections.highLow.low} : {REPORT_1219_DATA.sections.highLow.high}
+                        {generateDynamicReportData.sections.highLow.low} : {generateDynamicReportData.sections.highLow.high}
                       </div>
                     </div>
                   </div>
                   <div className="mt-3 text-xs text-gray-500 text-center">
-                    저({REPORT_1219_DATA.sections.highLow.lowRange}) / 고({REPORT_1219_DATA.sections.highLow.highRange})
+                    저({generateDynamicReportData.sections.highLow.lowRange}) / 고({generateDynamicReportData.sections.highLow.highRange})
                   </div>
                 </div>
               </div>
@@ -636,16 +675,16 @@ const App: React.FC = () => {
                 <div className="flex items-center gap-6">
                   <div className="text-center">
                     <div className="text-xs text-gray-400">합계</div>
-                    <div className="text-xl font-black text-white">{REPORT_1219_DATA.sections.sum.total}</div>
+                    <div className="text-xl font-black text-white">{generateDynamicReportData.sections.sum.total}</div>
                   </div>
                   <div className="text-center">
                     <div className="text-xs text-gray-400">이론 평균</div>
-                    <div className="text-lg font-bold text-gray-300">{REPORT_1219_DATA.sections.sum.average}</div>
+                    <div className="text-lg font-bold text-gray-300">{generateDynamicReportData.sections.sum.average}</div>
                   </div>
                   <div className="text-center">
                     <div className="text-xs text-gray-400">편차</div>
-                    <div className={`text-lg font-bold ${REPORT_1219_DATA.sections.sum.deviation < 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                      {REPORT_1219_DATA.sections.sum.deviation}
+                    <div className={`text-lg font-bold ${generateDynamicReportData.sections.sum.deviation < 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                      {generateDynamicReportData.sections.sum.deviation > 0 ? '+' : ''}{generateDynamicReportData.sections.sum.deviation}
                     </div>
                   </div>
                 </div>
@@ -655,30 +694,34 @@ const App: React.FC = () => {
               <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
                 <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
                   <span>🔄</span> 이전 회차 비교
-                  <span className="text-xs text-gray-500 font-normal ml-2">({REPORT_1219_DATA.sections.prevCompare.prevRound}회 → {REPORT_1219_DATA.round}회)</span>
+                  <span className="text-xs text-gray-500 font-normal ml-2">({generateDynamicReportData.sections.prevCompare.prevRound}회 → {generateDynamicReportData.round}회)</span>
                 </h3>
                 <div className="space-y-4">
                   <div>
                     <div className="text-xs text-gray-400 mb-2">이전 회차 번호</div>
                     <div className="flex gap-2 flex-wrap">
-                      {REPORT_1219_DATA.sections.prevCompare.prevNumbers.map(n => (
-                        <Ball key={`prev-${n}`} num={n} small onClick={() => handleBallClick(n)} />
-                      ))}
+                      {generateDynamicReportData.sections.prevCompare.prevNumbers.length > 0 ? (
+                        generateDynamicReportData.sections.prevCompare.prevNumbers.map(n => (
+                          <Ball key={`prev-${n}`} num={n} small onClick={() => handleBallClick(n)} />
+                        ))
+                      ) : (
+                        <div className="text-sm text-gray-500">데이터 없음</div>
+                      )}
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                     <div className="bg-gray-800 p-3 rounded-lg">
-                      <div className="text-xs text-gray-400 mb-2">재등장 ({REPORT_1219_DATA.sections.prevCompare.reappeared.length}개)</div>
+                      <div className="text-xs text-gray-400 mb-2">재등장 ({generateDynamicReportData.sections.prevCompare.reappeared.length}개)</div>
                       <div className="flex gap-2 flex-wrap">
-                        {REPORT_1219_DATA.sections.prevCompare.reappeared.map(n => (
+                        {generateDynamicReportData.sections.prevCompare.reappeared.map(n => (
                           <Ball key={`re-${n}`} num={n} small onClick={() => handleBallClick(n)} />
                         ))}
                       </div>
                     </div>
                     <div className="bg-gray-800 p-3 rounded-lg">
-                      <div className="text-xs text-gray-400 mb-2">신규 ({REPORT_1219_DATA.sections.prevCompare.newNumbers.length}개)</div>
+                      <div className="text-xs text-gray-400 mb-2">신규 ({generateDynamicReportData.sections.prevCompare.newNumbers.length}개)</div>
                       <div className="flex gap-2 flex-wrap">
-                        {REPORT_1219_DATA.sections.prevCompare.newNumbers.map(n => (
+                        {generateDynamicReportData.sections.prevCompare.newNumbers.map(n => (
                           <Ball key={`new-${n}`} num={n} small onClick={() => handleBallClick(n)} />
                         ))}
                       </div>
@@ -693,7 +736,7 @@ const App: React.FC = () => {
                   <span>🔗</span> 함께 자주 나온 쌍 Top 5
                 </h3>
                 <div className="space-y-3">
-                  {REPORT_1219_DATA.sections.frequentPairs.map((item, idx) => (
+                  {generateDynamicReportData.sections.frequentPairs.map((item, idx) => (
                     <div key={idx} className="flex items-center gap-3 p-2 hover:bg-gray-800 rounded-lg transition-colors">
                       <span className={`text-xs font-bold w-4 text-center ${idx < 3 ? 'text-yellow-400' : 'text-gray-500'}`}>
                         {idx + 1}
