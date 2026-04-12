@@ -62,8 +62,7 @@ const App: React.FC = () => {
   const [quantumApplied, setQuantumApplied] = useState(false);
   const analysisReportRef = useRef<HTMLDivElement>(null);
   const strategyReportRef = useRef<HTMLDivElement>(null);
-  const reportSectionRef = useRef<HTMLDivElement>(null);
-  const [selectedReportDraw, setSelectedReportDraw] = useState<LottoResult | null>(null);
+  const [expandedDraws, setExpandedDraws] = useState<Set<number>>(new Set());
   const autoInitStartedRef = useRef(false);
   const generatedHistoryRef = useRef<Set<string>>(new Set());
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
@@ -110,12 +109,8 @@ const App: React.FC = () => {
   // reportOpen 이 true 로 바뀐 뒤 React 가 DOM 을 commit 한 다음 스크롤.
   // setTimeout(0) 은 브라우저 paint 한 프레임 뒤 실행을 보장해 ref 가 항상 유효.
   useEffect(() => {
-    if (!selectedReportDraw) return;
-    const id = setTimeout(() => {
-      reportSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 0);
-    return () => clearTimeout(id);
-  }, [selectedReportDraw]);
+    // 이제 인라인으로 표시되므로 별도의 스크롤 효과는 필요하지 않습니다.
+  }, [expandedDraws]);
 
   useEffect(() => {
     if (allData.length === 0 || autoInitStartedRef.current) return;
@@ -254,24 +249,23 @@ const App: React.FC = () => {
 
   // -------------------------------------------------------
   // "최근 당첨 번호" 섹션의 행 클릭 시 호출.
-  // 선택한 회차 데이터를 기반으로 동적 리포트 생성 및 출력.
+  // 선택한 회차 데이터를 기반으로 동적 리포트 생성 및 인라인 출력 (토글).
   // -------------------------------------------------------
   const handleDrawBallClick = (draw: LottoResult) => {
-    // 다른 리포트 닫기
-    setSelectedAnalysisNum(null);
+    // 정밀 분석 리포트는 닫지 않고 유지할 수도 있지만, 요구사항에 맞게 필요하다면 유지합니다.
     
-    if (selectedReportDraw?.round === draw.round) {
-      setSelectedReportDraw(null);
-      setTimeout(() => setSelectedReportDraw(draw), 50);
-    } else {
-      setSelectedReportDraw(draw);
-    }
+    setExpandedDraws((prev) => {
+      const next = new Set(prev);
+      if (next.has(draw.round)) {
+        next.delete(draw.round);
+      } else {
+        next.add(draw.round);
+      }
+      return next;
+    });
   };
 
   const handleBallClick = (num: number) => {
-    // 다른 리포트 닫기
-    setSelectedReportDraw(null);
-
     setSelectedAnalysisNum(num);
     setRepeatAnalysis(analyzeRepeatProbability(allData, num, 100));
     setTimeout(() => {
@@ -279,10 +273,8 @@ const App: React.FC = () => {
     }, 100);
   };
 
-  const generateDynamicReportData = useMemo(() => {
-    if (!selectedReportDraw) return null;
-
-    const draw = selectedReportDraw;
+  // 동적으로 특정 회차의 리포트 데이터를 계산하는 함수
+  const generateDynamicReportData = (draw: LottoResult) => {
     const nums = draw.numbers;
 
     // 1. 구간 분포 계산
@@ -353,7 +345,7 @@ const App: React.FC = () => {
         frequentPairs,
       }
     };
-  }, [selectedReportDraw, allData]);
+  };
 
   if (loading) {
     return (
@@ -479,8 +471,7 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
                 <div className="text-sm text-gray-400 mb-3 font-medium flex items-center gap-2">
-                  <span className="text-red-400">🔥</span> 가장 많이 나온 번호 (Hot 5)
-                  <span className="ml-auto text-xs text-yellow-400">클릭 → 정밀 분석</span>
+                  <span className="text-red-400">🔥</span> 262회차부터 가장 많이 나온 번호 (Hot 5)
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   {stats.hotNumbers.slice(0, 5).map((n) => (
@@ -490,8 +481,7 @@ const App: React.FC = () => {
               </div>
               <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
                 <div className="text-sm text-gray-400 mb-3 font-medium flex items-center gap-2">
-                  <span className="text-blue-400">❄️</span> 가장 안 나온 번호 (Cold 5)
-                  <span className="ml-auto text-xs text-yellow-400">클릭 → 정밀 분석</span>
+                  <span className="text-blue-400">❄️</span> 262회차부터 가장 안 나온 번호 (Cold 5)
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   {stats.coldNumbers.slice(0, 5).map((n) => (
@@ -506,8 +496,7 @@ const App: React.FC = () => {
         {/* ── 최근 많이 나온 번호 Top 15 (가로형 카드 그리드) ── */}
         <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700 mt-8">
           <div className="flex flex-col items-center border-b border-gray-700 pb-4 mb-6">
-            <h3 className="text-xl font-bold text-blue-300">최근 많이 나온 번호 (Top 15)</h3>
-            <div className="text-xs text-yellow-400 mt-2">💡 공을 클릭하여 정밀 분석 확인</div>
+            <h3 className="text-xl font-bold text-blue-300">262회차부터 최근 많이 나온 번호 (Top 15)</h3>
           </div>
           {/* 5열 × 3행 가로형 카드 레이아웃 */}
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
@@ -550,217 +539,220 @@ const App: React.FC = () => {
             </div>
           </div>
           <div className="space-y-4">
-            {allData.slice(0, 10).map((draw, idx) => (
-              // 행 전체 클릭 → 회차 리포트
-              <div
-                key={idx}
-                className="flex flex-col md:flex-row items-center justify-between bg-gray-900 p-4 sm:p-5 rounded-xl border border-gray-700 hover:border-green-700/60 transition-colors cursor-pointer"
-                onClick={() => handleDrawBallClick(draw)}
-              >
-                {/* 회차·날짜 영역: 클릭 시 리포트 (부모 onClick 그대로 전파) */}
-                <div className="text-center md:text-left mb-4 md:mb-0 w-32 flex-shrink-0 select-none">
-                  <div className="text-xl font-black text-white">{draw.round}회차</div>
-                  <div className="text-sm text-gray-400 mt-1">{draw.date}</div>
+            {allData.slice(0, 10).map((draw, idx) => {
+              const isExpanded = expandedDraws.has(draw.round);
+              const dynamicData = isExpanded ? generateDynamicReportData(draw) : null;
+              
+              return (
+              <div key={idx} className="flex flex-col gap-2">
+                {/* 행 전체 클릭 → 회차 리포트 토글 */}
+                <div
+                  className={`flex flex-col md:flex-row items-center justify-between bg-gray-900 p-4 sm:p-5 rounded-xl border transition-colors cursor-pointer ${isExpanded ? 'border-green-500 shadow-[0_0_15px_rgba(34,197,94,0.2)]' : 'border-gray-700 hover:border-green-700/60'}`}
+                  onClick={() => handleDrawBallClick(draw)}
+                >
+                  {/* 회차·날짜 영역: 클릭 시 리포트 (부모 onClick 그대로 전파) */}
+                  <div className="text-center md:text-left mb-4 md:mb-0 w-32 flex-shrink-0 select-none">
+                    <div className="text-xl font-black text-white flex items-center justify-center md:justify-start gap-2">
+                      {draw.round}회차
+                      <span className="text-xs text-gray-500 md:hidden">{isExpanded ? '▲' : '▼'}</span>
+                    </div>
+                    <div className="text-sm text-gray-400 mt-1">{draw.date}</div>
+                  </div>
+
+                  {/* 번호 영역: 개별 공 클릭은 stopPropagation 후 정밀 분석으로 이동 */}
+                  <div className="flex items-center gap-[3px] sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-0 sm:px-2 w-full max-w-full">
+                    <div className="flex items-center gap-[3px] sm:gap-2 flex-shrink-0">
+                      {draw.numbers.map((num, i) => (
+                        <div
+                          key={i}
+                          onClick={(e) => { e.stopPropagation(); handleBallClick(num); }}
+                        >
+                          <Ball num={num} responsive />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-gray-500 text-base sm:text-2xl md:text-3xl mx-[2px] sm:mx-2 font-light flex-shrink-0 select-none">+</div>
+                    <div onClick={(e) => { e.stopPropagation(); handleBallClick(draw.bonus); }}>
+                      <Ball num={draw.bonus} isBonus responsive />
+                    </div>
+                  </div>
+                  
+                  <div className="hidden md:flex items-center justify-center w-8 text-gray-500">
+                    {isExpanded ? '▲' : '▼'}
+                  </div>
                 </div>
 
-                {/* 번호 영역: 개별 공 클릭은 stopPropagation 후 정밀 분석으로 이동 */}
-                <div className="flex items-center gap-[3px] sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-0 sm:px-2 w-full max-w-full">
-                  <div className="flex items-center gap-[3px] sm:gap-2 flex-shrink-0">
-                    {draw.numbers.map((num, i) => (
-                      <div
-                        key={i}
-                        onClick={(e) => { e.stopPropagation(); handleBallClick(num); }}
-                      >
-                        <Ball num={num} responsive />
+                {/* ── 회차 분석 리포트 (행 바로 아래 인라인 확장) ── */}
+                {isExpanded && dynamicData && (
+                  <div className="bg-gray-800/80 rounded-xl p-4 sm:p-6 md:p-8 shadow-inner border border-green-900/30 mt-2 mb-4 animate-fade-in ml-0 md:ml-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
+                      <h2 className="text-lg sm:text-xl font-bold text-green-300 flex items-center gap-2">
+                        <span>📋</span>
+                        <span className="break-keep">제 {dynamicData.round}회 당첨 번호 분석 리포트</span>
+                      </h2>
+                    </div>
+
+                    <div className="space-y-6 text-gray-200">
+                      {/* 1. 당첨 번호 요약 */}
+                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                        <div className="text-center mb-4">
+                          <div className="text-sm text-gray-400 mb-1">{dynamicData.date}</div>
+                          <div className="text-xl font-black text-white">제 {dynamicData.round}회 당첨 번호</div>
+                        </div>
+                        <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
+                          {dynamicData.numbers.map(num => (
+                            <Ball key={num} num={num} onClick={() => handleBallClick(num)} />
+                          ))}
+                          <div className="text-gray-500 text-2xl mx-1 font-light">+</div>
+                          <Ball num={dynamicData.bonus} isBonus onClick={() => handleBallClick(dynamicData.bonus)} />
+                        </div>
                       </div>
-                    ))}
+
+                      {/* 2. 구간 분포 & 홀짝/고저 */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                          <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+                            <span>📊</span> 구간 분포
+                          </h3>
+                          <div className="space-y-3">
+                            {dynamicData.sections.distribution.map((item, idx) => (
+                              <div key={idx} className="flex items-center gap-3">
+                                <span className="text-xs text-gray-400 w-12 text-right">{item.range}</span>
+                                <div className="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-green-500 rounded-full"
+                                    style={{ width: `${(item.count / 2) * 100}%` }}
+                                  />
+                                </div>
+                                <span className="text-sm font-bold text-white w-6">{item.count}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                          <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+                            <span>⚖️</span> 홀짝 · 고저
+                          </h3>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="bg-gray-800 p-3 rounded-lg text-center border border-gray-700/50">
+                              <div className="text-xs text-gray-400 mb-1">홀짝 비율</div>
+                              <div className="text-xl font-black text-blue-300">
+                                {dynamicData.sections.oddEven.odd} : {dynamicData.sections.oddEven.even}
+                              </div>
+                            </div>
+                            <div className="bg-gray-800 p-3 rounded-lg text-center border border-gray-700/50">
+                              <div className="text-xs text-gray-400 mb-1">고저 비율</div>
+                              <div className="text-xl font-black text-purple-300">
+                                {dynamicData.sections.highLow.low} : {dynamicData.sections.highLow.high}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-3 text-xs text-gray-500 text-center">
+                            저({dynamicData.sections.highLow.lowRange}) / 고({dynamicData.sections.highLow.highRange})
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 3. 번호 합계 */}
+                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+                        <div className="flex items-center gap-2">
+                          <span>➕</span>
+                          <span className="text-sm font-bold text-gray-300">번호 합계</span>
+                        </div>
+                        <div className="flex items-center gap-6">
+                          <div className="text-center">
+                            <div className="text-xs text-gray-400">합계</div>
+                            <div className="text-xl font-black text-white">{dynamicData.sections.sum.total}</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-xs text-gray-400">이론 평균</div>
+                            <div className="text-lg font-bold text-gray-300">{dynamicData.sections.sum.average}</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-xs text-gray-400">편차</div>
+                            <div className={`text-lg font-bold ${dynamicData.sections.sum.deviation < 0 ? 'text-blue-400' : 'text-red-400'}`}>
+                              {dynamicData.sections.sum.deviation > 0 ? '+' : ''}{dynamicData.sections.sum.deviation}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 4. 이전 회차 비교 */}
+                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                        <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+                          <span>🔄</span> 이전 회차 비교
+                          <span className="text-xs text-gray-500 font-normal ml-2">({dynamicData.sections.prevCompare.prevRound}회 → {dynamicData.round}회)</span>
+                        </h3>
+                        <div className="space-y-4">
+                          <div>
+                            <div className="text-xs text-gray-400 mb-2">이전 회차 번호</div>
+                            <div className="flex gap-2 flex-wrap">
+                              {dynamicData.sections.prevCompare.prevNumbers.length > 0 ? (
+                                dynamicData.sections.prevCompare.prevNumbers.map(n => (
+                                  <Ball key={`prev-${n}`} num={n} small onClick={() => handleBallClick(n)} />
+                                ))
+                              ) : (
+                                <div className="text-sm text-gray-500">데이터 없음</div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                            <div className="bg-gray-800 p-3 rounded-lg border border-gray-700/50">
+                              <div className="text-xs text-gray-400 mb-2">재등장 ({dynamicData.sections.prevCompare.reappeared.length}개)</div>
+                              <div className="flex gap-2 flex-wrap">
+                                {dynamicData.sections.prevCompare.reappeared.map(n => (
+                                  <Ball key={`re-${n}`} num={n} small onClick={() => handleBallClick(n)} />
+                                ))}
+                              </div>
+                            </div>
+                            <div className="bg-gray-800 p-3 rounded-lg border border-gray-700/50">
+                              <div className="text-xs text-gray-400 mb-2">신규 ({dynamicData.sections.prevCompare.newNumbers.length}개)</div>
+                              <div className="flex gap-2 flex-wrap">
+                                {dynamicData.sections.prevCompare.newNumbers.map(n => (
+                                  <Ball key={`new-${n}`} num={n} small onClick={() => handleBallClick(n)} />
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 5. 함께 자주 나온 쌍 Top 5 */}
+                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                        <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
+                          <span>🔗</span> 함께 자주 나온 쌍 Top 5
+                        </h3>
+                        <div className="space-y-3">
+                          {dynamicData.sections.frequentPairs.map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-3 p-2 hover:bg-gray-800 rounded-lg transition-colors">
+                              <span className={`text-xs font-bold w-4 text-center ${idx < 3 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                                {idx + 1}
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <Ball num={item.pair[0]} small onClick={() => handleBallClick(item.pair[0])} />
+                                <span className="text-gray-500 text-xs mx-1">+</span>
+                                <Ball num={item.pair[1]} small onClick={() => handleBallClick(item.pair[1])} />
+                              </div>
+                              <div className="ml-auto text-right">
+                                <div className="text-sm font-bold text-white">{item.count}회</div>
+                                <div className="text-xs text-gray-400">({item.percentage.toFixed(1)}%)</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      
+                      <div className="text-center text-xs text-gray-500 pt-4">
+                        로또는 예측 불가합니다. 본 서비스의 분석 및 추천은 통계 참고 자료이며 당첨을 보장하지 않습니다.
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-gray-500 text-base sm:text-2xl md:text-3xl mx-[2px] sm:mx-2 font-light flex-shrink-0 select-none">+</div>
-                  <div onClick={(e) => { e.stopPropagation(); handleBallClick(draw.bonus); }}>
-                    <Ball num={draw.bonus} isBonus responsive />
-                  </div>
-                </div>
+                )}
               </div>
-            ))}
+            )})}
           </div>
         </div>
-
-        {/* ── 회차 분석 리포트 (최근 당첨 번호 클릭 시 표시) ── */}
-        {/* reportOpen 이 true 가 된 직후 DOM mount → useEffect 에서 스크롤 */}
-        {selectedReportDraw && generateDynamicReportData && (
-          <div ref={reportSectionRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-green-900/50 mt-8 animate-fade-in">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
-              <h2 className="text-xl sm:text-2xl font-bold text-green-300 flex items-center gap-2">
-                <span>📋</span>
-                <span className="break-keep">제 {generateDynamicReportData.round}회 당첨 번호 분석 리포트</span>
-              </h2>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => { setSelectedReportDraw(null); }}
-                  className="text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 px-2 py-1 rounded transition-colors"
-                >
-                  닫기
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-6 text-gray-200">
-              {/* 1. 당첨 번호 요약 */}
-              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
-                <div className="text-center mb-4">
-                  <div className="text-sm text-gray-400 mb-1">{generateDynamicReportData.date}</div>
-                  <div className="text-2xl font-black text-white">제 {generateDynamicReportData.round}회 당첨 번호</div>
-                </div>
-                <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
-                  {generateDynamicReportData.numbers.map(num => (
-                    <Ball key={num} num={num} onClick={() => handleBallClick(num)} />
-                  ))}
-                  <div className="text-gray-500 text-2xl mx-1 font-light">+</div>
-                  <Ball num={generateDynamicReportData.bonus} isBonus onClick={() => handleBallClick(generateDynamicReportData.bonus)} />
-                </div>
-              </div>
-
-              {/* 2. 구간 분포 & 홀짝/고저 */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
-                  <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
-                    <span>📊</span> 구간 분포
-                  </h3>
-                  <div className="space-y-3">
-                    {generateDynamicReportData.sections.distribution.map((item, idx) => (
-                      <div key={idx} className="flex items-center gap-3">
-                        <span className="text-xs text-gray-400 w-12 text-right">{item.range}</span>
-                        <div className="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-green-500 rounded-full"
-                            style={{ width: `${(item.count / 2) * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-sm font-bold text-white w-6">{item.count}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
-                  <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
-                    <span>⚖️</span> 홀짝 · 고저
-                  </h3>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-gray-800 p-3 rounded-lg text-center">
-                      <div className="text-xs text-gray-400 mb-1">홀짝 비율</div>
-                      <div className="text-xl font-black text-blue-300">
-                        {generateDynamicReportData.sections.oddEven.odd} : {generateDynamicReportData.sections.oddEven.even}
-                      </div>
-                    </div>
-                    <div className="bg-gray-800 p-3 rounded-lg text-center">
-                      <div className="text-xs text-gray-400 mb-1">고저 비율</div>
-                      <div className="text-xl font-black text-purple-300">
-                        {generateDynamicReportData.sections.highLow.low} : {generateDynamicReportData.sections.highLow.high}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="mt-3 text-xs text-gray-500 text-center">
-                    저({generateDynamicReportData.sections.highLow.lowRange}) / 고({generateDynamicReportData.sections.highLow.highRange})
-                  </div>
-                </div>
-              </div>
-
-              {/* 3. 번호 합계 */}
-              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700 flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-2">
-                  <span>➕</span>
-                  <span className="text-sm font-bold text-gray-300">번호 합계</span>
-                </div>
-                <div className="flex items-center gap-6">
-                  <div className="text-center">
-                    <div className="text-xs text-gray-400">합계</div>
-                    <div className="text-xl font-black text-white">{generateDynamicReportData.sections.sum.total}</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xs text-gray-400">이론 평균</div>
-                    <div className="text-lg font-bold text-gray-300">{generateDynamicReportData.sections.sum.average}</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xs text-gray-400">편차</div>
-                    <div className={`text-lg font-bold ${generateDynamicReportData.sections.sum.deviation < 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                      {generateDynamicReportData.sections.sum.deviation > 0 ? '+' : ''}{generateDynamicReportData.sections.sum.deviation}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 4. 이전 회차 비교 */}
-              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
-                <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
-                  <span>🔄</span> 이전 회차 비교
-                  <span className="text-xs text-gray-500 font-normal ml-2">({generateDynamicReportData.sections.prevCompare.prevRound}회 → {generateDynamicReportData.round}회)</span>
-                </h3>
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-xs text-gray-400 mb-2">이전 회차 번호</div>
-                    <div className="flex gap-2 flex-wrap">
-                      {generateDynamicReportData.sections.prevCompare.prevNumbers.length > 0 ? (
-                        generateDynamicReportData.sections.prevCompare.prevNumbers.map(n => (
-                          <Ball key={`prev-${n}`} num={n} small onClick={() => handleBallClick(n)} />
-                        ))
-                      ) : (
-                        <div className="text-sm text-gray-500">데이터 없음</div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                    <div className="bg-gray-800 p-3 rounded-lg">
-                      <div className="text-xs text-gray-400 mb-2">재등장 ({generateDynamicReportData.sections.prevCompare.reappeared.length}개)</div>
-                      <div className="flex gap-2 flex-wrap">
-                        {generateDynamicReportData.sections.prevCompare.reappeared.map(n => (
-                          <Ball key={`re-${n}`} num={n} small onClick={() => handleBallClick(n)} />
-                        ))}
-                      </div>
-                    </div>
-                    <div className="bg-gray-800 p-3 rounded-lg">
-                      <div className="text-xs text-gray-400 mb-2">신규 ({generateDynamicReportData.sections.prevCompare.newNumbers.length}개)</div>
-                      <div className="flex gap-2 flex-wrap">
-                        {generateDynamicReportData.sections.prevCompare.newNumbers.map(n => (
-                          <Ball key={`new-${n}`} num={n} small onClick={() => handleBallClick(n)} />
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 5. 함께 자주 나온 쌍 Top 5 */}
-              <div className="bg-gray-900 p-5 rounded-xl border border-gray-700">
-                <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
-                  <span>🔗</span> 함께 자주 나온 쌍 Top 5
-                </h3>
-                <div className="space-y-3">
-                  {generateDynamicReportData.sections.frequentPairs.map((item, idx) => (
-                    <div key={idx} className="flex items-center gap-3 p-2 hover:bg-gray-800 rounded-lg transition-colors">
-                      <span className={`text-xs font-bold w-4 text-center ${idx < 3 ? 'text-yellow-400' : 'text-gray-500'}`}>
-                        {idx + 1}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <Ball num={item.pair[0]} small onClick={() => handleBallClick(item.pair[0])} />
-                        <span className="text-gray-500 text-xs mx-1">+</span>
-                        <Ball num={item.pair[1]} small onClick={() => handleBallClick(item.pair[1])} />
-                      </div>
-                      <div className="ml-auto text-right">
-                        <div className="text-sm font-bold text-white">{item.count}회</div>
-                        <div className="text-xs text-gray-400">({item.percentage.toFixed(1)}%)</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              
-              <div className="text-center text-xs text-gray-500 pt-4">
-                로또는 예측 불가합니다. 본 서비스의 분석 및 추천은 통계 참고 자료이며 당첨을 보장하지 않습니다.
-              </div>
-            </div>
-          </div>
-        )}
 
         {selectedAnalysisNum && repeatAnalysis && (
           <div ref={analysisReportRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/50 mt-8">
