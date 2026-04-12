@@ -479,7 +479,7 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="space-y-4 lg:col-span-1">
                 <div className="bg-gray-900 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
-                  <span className="text-gray-400 font-medium">전체 출현 횟수</span>
+                  <span className="text-gray-400 font-medium">262회차부터 출현 횟수</span>
                   <span className="font-bold text-xl text-white">{repeatAnalysis.totalOccurrences}회</span>
                 </div>
                 <div className="bg-gray-900 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
@@ -531,6 +531,78 @@ const App: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* Z-Score 지표 */}
+            <div className="mt-6 bg-gray-900 rounded-xl border border-indigo-800/50 p-5">
+              <h3 className="text-sm font-bold text-indigo-400 mb-4 flex items-center gap-2">
+                <span>📊</span> Z-Score 지표 <span className="text-gray-500 font-normal text-xs">(전체 회차 기준 통계적 편차)</span>
+              </h3>
+              <div className="flex flex-col sm:flex-row items-center gap-6">
+                <div className="flex flex-col items-center justify-center bg-gray-800 rounded-xl p-5 min-w-[120px] border border-gray-700">
+                  <span className="text-xs text-gray-400 mb-1">Z-Score</span>
+                  <span className={`text-3xl font-black ${repeatAnalysis.zScore > 1 ? 'text-red-400' : repeatAnalysis.zScore < -1 ? 'text-blue-400' : 'text-green-400'}`}>
+                    {repeatAnalysis.zScore > 0 ? '+' : ''}{repeatAnalysis.zScore.toFixed(2)}
+                  </span>
+                  <span className={`mt-2 text-xs font-bold px-2 py-0.5 rounded ${repeatAnalysis.zScore > 1 ? 'bg-red-900/50 text-red-300' : repeatAnalysis.zScore < -1 ? 'bg-blue-900/50 text-blue-300' : 'bg-green-900/50 text-green-300'}`}>
+                    {repeatAnalysis.zScore > 1 ? '과출현' : repeatAnalysis.zScore < -1 ? '저출현' : '평균 수준'}
+                  </span>
+                </div>
+                <div className="flex-1 space-y-2 text-sm text-gray-300 w-full">
+                  <div className="flex items-center gap-3">
+                    <div className="w-3 h-3 rounded-full bg-red-400 flex-shrink-0" />
+                    <span><strong className="text-red-300">Z &gt; +1.0</strong>: 평균보다 유의미하게 많이 출현한 번호 (과출현)</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-3 h-3 rounded-full bg-green-400 flex-shrink-0" />
+                    <span><strong className="text-green-300">-1.0 ~ +1.0</strong>: 평균 수준의 출현 빈도 (정상 범위)</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-3 h-3 rounded-full bg-blue-400 flex-shrink-0" />
+                    <span><strong className="text-blue-300">Z &lt; -1.0</strong>: 평균보다 유의미하게 적게 출현한 번호 (저출현)</span>
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500">
+                    Z-Score = (해당 번호 출현 빈도 − 전체 평균 빈도) ÷ 표준편차 &nbsp;|&nbsp; 전체 1~45번 기준 계산
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 동반 출현 번호 Top 10 */}
+            {repeatAnalysis.coOccurrenceTop10.length > 0 && (
+              <div className="mt-6 bg-gray-900 rounded-xl border border-purple-800/50 p-5">
+                <h3 className="text-sm font-bold text-purple-400 mb-4 flex items-center gap-2">
+                  <span>🔗</span> 동반 출현 번호 Top 10 <span className="text-gray-500 font-normal text-xs">(같은 회차에 함께 출현한 번호 순위)</span>
+                </h3>
+                <div className="space-y-2">
+                  {repeatAnalysis.coOccurrenceTop10.map((entry, idx) => {
+                    const maxCount = repeatAnalysis.coOccurrenceTop10[0].count;
+                    const barPct = maxCount > 0 ? (entry.count / maxCount) * 100 : 0;
+                    return (
+                      <div key={entry.number} className="flex items-center gap-3">
+                        <span className={`w-6 text-right text-xs font-bold flex-shrink-0 ${idx < 3 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                          {idx + 1}
+                        </span>
+                        <div className="flex-shrink-0">
+                          <Ball num={entry.number} small onClick={() => handleBallClick(entry.number)} />
+                        </div>
+                        <div className="flex-1 h-5 bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${idx < 3 ? 'bg-purple-500' : 'bg-gray-600'}`}
+                            style={{ width: `${barPct}%` }}
+                          />
+                        </div>
+                        <span className="w-14 text-right text-sm font-bold text-gray-300 flex-shrink-0">
+                          {entry.count}회
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500">
+                  * 전체 회차(262회차~) 데이터 기준. 공을 클릭하면 해당 번호의 정밀 분석으로 이동합니다.
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

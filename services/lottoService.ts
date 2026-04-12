@@ -104,6 +104,11 @@ export interface LottoStats {
   oddEvenAverage: string;
 }
 
+export interface CoOccurrenceEntry {
+  number: number;
+  count: number;
+}
+
 export interface RepeatAnalysis {
   targetNumber: number;
   totalOccurrences: number;
@@ -119,6 +124,8 @@ export interface RepeatAnalysis {
   confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW';
   insight: string;
   recommendation: string;
+  zScore: number;
+  coOccurrenceTop10: CoOccurrenceEntry[];
 }
 
 export function analyzeRepeatProbability(results: LottoResult[], targetNumber: number, lookbackRounds = 100): RepeatAnalysis {
@@ -128,6 +135,7 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
       repeatAfterOne: 0, repeatAfterTwo: 0, repeatPercentage: 0, averageGap: 0,
       gapTrend: 'STABLE', lastSeenRound: 0, roundsSinceLastSeen: 0,
       confidenceLevel: 'LOW', insight: '데이터 부족', recommendation: '데이터 부족',
+      zScore: 0, coOccurrenceTop10: [],
     };
   }
   const checkRounds = Math.min(lookbackRounds, results.length);
@@ -185,10 +193,41 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
     insight = '완전 미출현';
     recommendation = `최근 ${checkRounds}회차 동안 단 한 번도 출현하지 않은 극단적 콜드 번호입니다.`;
   }
+
+  // Z-Score: 전체 데이터 기준 출현 빈도 통계
+  const allFrequencies: Record<number, number> = {};
+  for (let i = 1; i <= 45; i++) allFrequencies[i] = 0;
+  results.forEach(r => {
+    r.numbers.forEach(n => { allFrequencies[n]++; });
+    allFrequencies[r.bonus]++;
+  });
+  const allFreqValues = Object.values(allFrequencies);
+  const freqMean = allFreqValues.reduce((a, b) => a + b, 0) / 45;
+  const freqVariance = allFreqValues.reduce((a, b) => a + (b - freqMean) ** 2, 0) / 45;
+  const freqStdDev = Math.sqrt(freqVariance);
+  const zScore = freqStdDev > 0 ? (allFrequencies[targetNumber] - freqMean) / freqStdDev : 0;
+
+  // 동반 출현 번호 Top 10: 전체 데이터 기준
+  const coOccurrenceMap: Record<number, number> = {};
+  for (let i = 1; i <= 45; i++) if (i !== targetNumber) coOccurrenceMap[i] = 0;
+  results.forEach(r => {
+    const allNums = [...r.numbers, r.bonus];
+    if (allNums.includes(targetNumber)) {
+      allNums.forEach(n => {
+        if (n !== targetNumber) coOccurrenceMap[n] = (coOccurrenceMap[n] || 0) + 1;
+      });
+    }
+  });
+  const coOccurrenceTop10 = Object.entries(coOccurrenceMap)
+    .map(([num, count]) => ({ number: Number(num), count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
   return {
     targetNumber, totalOccurrences, recent10Occurrences, recent30Occurrences,
     repeatAfterOne, repeatAfterTwo, repeatPercentage, averageGap, gapTrend,
     lastSeenRound, roundsSinceLastSeen, confidenceLevel, insight, recommendation,
+    zScore, coOccurrenceTop10,
   };
 }
 
