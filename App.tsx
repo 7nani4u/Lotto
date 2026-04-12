@@ -63,6 +63,7 @@ const App: React.FC = () => {
   const analysisReportRef = useRef<HTMLDivElement>(null);
   const strategyReportRef = useRef<HTMLDivElement>(null);
   const reportSectionRef = useRef<HTMLDivElement>(null);
+  const [reportOpen, setReportOpen] = useState(false);       // 섹션 표시 여부
   const [reportHtml, setReportHtml] = useState<string | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
@@ -108,6 +109,16 @@ const App: React.FC = () => {
     if (!quantumOptResult) return;
     setQuantumApplied(true);
   }, [quantumOptResult]);
+
+  // reportOpen 이 true 로 바뀐 뒤 React 가 DOM 을 commit 한 다음 스크롤.
+  // setTimeout(0) 은 브라우저 paint 한 프레임 뒤 실행을 보장해 ref 가 항상 유효.
+  useEffect(() => {
+    if (!reportOpen) return;
+    const id = setTimeout(() => {
+      reportSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+    return () => clearTimeout(id);
+  }, [reportOpen]);
 
   useEffect(() => {
     if (allData.length === 0 || autoInitStartedRef.current) return;
@@ -314,16 +325,22 @@ const App: React.FC = () => {
   // 이미 로드된 경우 재요청 없이 스크롤만 이동.
   // -------------------------------------------------------
   const handleDrawBallClick = async () => {
-    // 이미 데이터가 있으면 바로 스크롤
-    if (reportHtml) {
-      setTimeout(() => reportSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
-      return;
-    }
+    // reportOpen 을 true 로 설정 → 섹션이 DOM 에 mount 됨
+    // → useEffect 가 DOM commit 후 scrollIntoView 를 호출
+    setReportOpen(true);
+
+    // 이미 HTML 이 로드된 경우 fetch 없이 스크롤만 진행
+    if (reportHtml) return;
+
     setReportLoading(true);
     setReportError(null);
-    setTimeout(() => reportSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 200);
     try {
       const res = await fetch('/api/report');
+      // 응답이 JSON 이 아닐 경우(예: 404 HTML) 별도 처리
+      const contentType = res.headers.get('content-type') ?? '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(`서버 응답 오류 (HTTP ${res.status})`);
+      }
       const data = await res.json() as { html?: string; error?: string; detail?: string };
       if (!res.ok || data.error) {
         throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -526,35 +543,47 @@ const App: React.FC = () => {
         </div>
 
         {/* ── 최근 당첨 번호 ── */}
-        {/* 번호 클릭 시 handleDrawBallClick 호출 → 45labs 리포트를 아래 섹션에 출력 */}
+        {/* 행의 번호 외 영역(회차·날짜·배경) 클릭 → 45labs 리포트 출력  */}
+        {/* 번호(공) 클릭 → 기존 선택 번호 정밀 분석 리포트 (stopPropagation) */}
         <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-gray-700 mt-8">
           <div className="flex flex-col md:flex-row items-center justify-between border-b border-gray-700 pb-4 mb-6">
             <h2 className="text-2xl font-bold text-blue-300">최근 당첨 번호</h2>
-            <div className="text-xs sm:text-sm text-green-400 bg-green-400/10 px-3 py-2 rounded-xl mt-3 md:mt-0 flex items-center justify-center gap-2 animate-pulse text-center break-keep">
-              <span>📋</span>
-              <span>
-                공을 클릭하면 <strong className="whitespace-nowrap">45labs 회차 분석 리포트</strong>를 볼 수 있습니다.
-              </span>
+            <div className="text-xs sm:text-sm text-gray-400 bg-gray-700/40 px-3 py-2 rounded-xl mt-3 md:mt-0 flex flex-col sm:flex-row items-center gap-1 sm:gap-3 text-center break-keep">
+              <span className="text-yellow-400">💡 번호 클릭 → 정밀 분석</span>
+              <span className="hidden sm:block text-gray-600">|</span>
+              <span className="text-green-400">📋 번호 외 영역 클릭 → 회차 리포트</span>
             </div>
           </div>
           <div className="space-y-4">
             {allData.slice(0, 10).map((draw, idx) => (
+              // 행 전체 클릭 → 45labs 리포트
               <div
                 key={idx}
-                className="flex flex-col md:flex-row items-center justify-between bg-gray-900 p-4 sm:p-5 rounded-xl border border-gray-700 hover:border-green-700/60 transition-colors"
+                className="flex flex-col md:flex-row items-center justify-between bg-gray-900 p-4 sm:p-5 rounded-xl border border-gray-700 hover:border-green-700/60 transition-colors cursor-pointer"
+                onClick={() => void handleDrawBallClick()}
               >
-                <div className="text-center md:text-left mb-4 md:mb-0 w-32 flex-shrink-0">
+                {/* 회차·날짜 영역: 클릭 시 리포트 (부모 onClick 그대로 전파) */}
+                <div className="text-center md:text-left mb-4 md:mb-0 w-32 flex-shrink-0 select-none">
                   <div className="text-xl font-black text-white">{draw.round}회차</div>
                   <div className="text-sm text-gray-400 mt-1">{draw.date}</div>
                 </div>
+
+                {/* 번호 영역: 개별 공 클릭은 stopPropagation 후 정밀 분석으로 이동 */}
                 <div className="flex items-center gap-[3px] sm:gap-2 flex-nowrap justify-center mt-2 md:mt-0 px-0 sm:px-2 w-full max-w-full">
                   <div className="flex items-center gap-[3px] sm:gap-2 flex-shrink-0">
                     {draw.numbers.map((num, i) => (
-                      <Ball key={i} num={num} responsive onClick={() => void handleDrawBallClick()} />
+                      <div
+                        key={i}
+                        onClick={(e) => { e.stopPropagation(); handleBallClick(num); }}
+                      >
+                        <Ball num={num} responsive />
+                      </div>
                     ))}
                   </div>
-                  <div className="text-gray-500 text-base sm:text-2xl md:text-3xl mx-[2px] sm:mx-2 font-light flex-shrink-0">+</div>
-                  <Ball num={draw.bonus} isBonus responsive onClick={() => void handleDrawBallClick()} />
+                  <div className="text-gray-500 text-base sm:text-2xl md:text-3xl mx-[2px] sm:mx-2 font-light flex-shrink-0 select-none">+</div>
+                  <div onClick={(e) => { e.stopPropagation(); handleBallClick(draw.bonus); }}>
+                    <Ball num={draw.bonus} isBonus responsive />
+                  </div>
                 </div>
               </div>
             ))}
@@ -562,7 +591,8 @@ const App: React.FC = () => {
         </div>
 
         {/* ── 45labs 회차 분석 리포트 (최근 당첨 번호 클릭 시 표시) ── */}
-        {(reportLoading || reportError !== null || reportHtml !== null) && (
+        {/* reportOpen 이 true 가 된 직후 DOM mount → useEffect 에서 스크롤 */}
+        {reportOpen && (
           <div ref={reportSectionRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-green-900/50 mt-8">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
               <h2 className="text-xl sm:text-2xl font-bold text-green-300 flex items-center gap-2">
@@ -571,14 +601,12 @@ const App: React.FC = () => {
               </h2>
               <div className="flex items-center gap-3">
                 <span className="text-xs text-gray-500">출처: 45labs.kr / 1219회차</span>
-                {reportHtml && (
-                  <button
-                    onClick={() => { setReportHtml(null); setReportError(null); }}
-                    className="text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 px-2 py-1 rounded transition-colors"
-                  >
-                    닫기
-                  </button>
-                )}
+                <button
+                  onClick={() => { setReportOpen(false); setReportHtml(null); setReportError(null); }}
+                  className="text-xs text-gray-400 hover:text-white border border-gray-600 hover:border-gray-400 px-2 py-1 rounded transition-colors"
+                >
+                  닫기
+                </button>
               </div>
             </div>
 
@@ -599,7 +627,7 @@ const App: React.FC = () => {
                   CORS 또는 원격 서버 오류일 수 있습니다. Vercel 배포 환경에서는 <code>/api/report</code> 프록시가 자동으로 동작합니다.
                 </p>
                 <button
-                  onClick={() => void handleDrawBallClick()}
+                  onClick={() => { setReportError(null); void handleDrawBallClick(); }}
                   className="mt-3 px-4 py-2 text-sm bg-red-700/50 hover:bg-red-600/60 rounded-lg transition-colors"
                 >
                   다시 시도
