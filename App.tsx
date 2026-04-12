@@ -293,9 +293,16 @@ const App: React.FC = () => {
     // 다른 리포트 닫기
     setSelectedAnalysisNum(null);
     
-    // reportOpen 을 true 로 설정 → 섹션이 DOM 에 mount 됨
-    // → useEffect 가 DOM commit 후 scrollIntoView 를 호출
-    setReportOpen(true);
+    // 이미 열려있으면 다시 스크롤만 진행하기 위해,
+    // false 로 잠깐 바꿨다가 true 로 변경하여 DOM 재렌더링 유도
+    if (reportOpen) {
+      setReportOpen(false);
+      setTimeout(() => {
+        setReportOpen(true);
+      }, 50);
+    } else {
+      setReportOpen(true);
+    }
   };
 
   const handleBallClick = (num: number) => {
