@@ -400,6 +400,292 @@ function applyQuantumFluctuation(num: number, sigma = 2): number {
 }
 
 // ==========================================
+// 4.5. TECHNICAL INDICATOR ADAPTATIONS
+// ==========================================
+//
+// All four classic financial indicators are reinterpreted for lottery frequency
+// analysis. Key constraint: each draw is an INDEPENDENT event — there is no
+// price series, no trend in the financial sense. Instead we track binary
+// appearance/absence patterns across a rolling window of draws.
+//
+// The resulting weight multipliers are intentionally modest (±10-15% max per
+// indicator) so they nudge the base statistical weights rather than override them.
+// ==========================================
+
+export interface TechnicalIndicatorScore {
+  number: number;
+  maSignal: number;        // short-MA minus long-MA of binary appearance: + = trending hot
+  rsi: number;             // 0–100: <30 = under-appeared (oversold), >70 = over-appeared (overbought)
+  bollingerPctB: number;   // %B: 0 = lower band, 1 = upper band; outside [0,1] = extreme deviation
+  aroonOscillator: number; // −100 to +100: positive = appeared recently with short droughts
+  compositeBoost: number;  // final multiplicative weight from all 4 indicators combined
+}
+
+// ------------------------------------------------------------------
+// MOVING AVERAGE ADAPTATION
+//
+// Finance: MA smooths a price series over N periods to reveal trend direction.
+//
+// Why it does NOT apply directly: A lottery number has no price value to smooth.
+// There is no magnitude of change between draws — only presence or absence.
+// Applying MA to sequential draw numbers (e.g., "the 5th ball was 23, then 31")
+// is meaningless because draw order within a single ticket is arbitrary.
+//
+// Reinterpretation — "Frequency Moving Average":
+//   Treat each draw as a binary signal per number: 1 if appeared, 0 if absent.
+//   Short MA (W_s draws) vs Long MA (W_l draws) of this binary stream =
+//   rolling appearance rate over different time horizons.
+//
+//   MA(n, W) = (1/W) × Σ[i=0..W-1] I(n ∈ draw_i)          I = indicator function
+//   Signal(n) = MA(n, shortW) − MA(n, longW)
+//
+//   Signal > 0  → short-window frequency exceeds long-window → number trending hot
+//   Signal < 0  → short-window frequency below long-window  → number cooling off
+//
+// This is analogous to a short MA crossing above a long MA (bullish crossover)
+// but applied to frequency rather than price.
+// ------------------------------------------------------------------
+function computeLotteryMA(
+  results: LottoResult[],
+  num: number,
+  shortWindow = 10,
+  longWindow = 30
+): number {
+  const shortW = Math.min(shortWindow, results.length);
+  const longW  = Math.min(longWindow,  results.length);
+
+  let shortCount = 0;
+  let longCount  = 0;
+
+  for (let i = 0; i < longW; i++) {
+    const appeared = (results[i].numbers.includes(num) || results[i].bonus === num) ? 1 : 0;
+    if (i < shortW) shortCount += appeared;
+    longCount += appeared;
+  }
+
+  // Normalized difference: theoretical range ≈ [−0.3, +0.3] for a 6/45 game
+  // (expected rate ≈ 6/45 ≈ 13.3% per draw, so deviations are small)
+  return (shortCount / shortW) - (longCount / longW);
+}
+
+// ------------------------------------------------------------------
+// RSI ADAPTATION
+//
+// Finance: RSI compares average gains vs average losses over N periods to
+// identify overbought (>70) or oversold (<30) price conditions.
+//
+// Why it does NOT apply directly: A lottery number has no gain/loss magnitude.
+// The traditional RS = avg_gain / avg_loss requires a continuous price return
+// series — which does not exist for a binary presence/absence sequence.
+//
+// Reinterpretation — "Appearance Momentum RSI":
+//   "Up period"  = draw where number appeared   → contributes to avg_gain
+//   "Down period" = draw where it did NOT appear → contributes to avg_loss
+//   avg_gain = appearances / W      (normalized appearance rate)
+//   avg_loss = absences  / W        (normalized absence rate)
+//   RS = avg_gain / avg_loss = appearances / absences
+//   RSI(n, W) = 100 − (100 / (1 + RS))
+//
+//   RSI > 70 → appeared frequently recently → "overbought" in frequency space
+//             → mean reversion suggests reducing its weight slightly
+//   RSI < 30 → appeared rarely recently → "oversold"
+//             → expected return to mean suggests boosting its weight slightly
+//
+// This is conceptually valid: it measures momentum of binary frequency,
+// mirroring how RSI measures momentum of price change magnitude.
+// ------------------------------------------------------------------
+function computeLotteryRSI(results: LottoResult[], num: number, window = 20): number {
+  const W = Math.min(window, results.length);
+  let appearances = 0;
+
+  for (let i = 0; i < W; i++) {
+    if (results[i].numbers.includes(num) || results[i].bonus === num) appearances++;
+  }
+
+  const absences = W - appearances;
+  if (absences === 0) return 100; // appeared in every draw — extreme overbought
+  if (appearances === 0) return 0; // never appeared — extreme oversold
+
+  const RS = appearances / absences;
+  return 100 - (100 / (1 + RS));
+}
+
+// ------------------------------------------------------------------
+// BOLLINGER BANDS ADAPTATION
+//
+// Finance: Bollinger Bands place envelopes at ±2σ around a price moving average
+// to identify volatility and relative price extremes.
+//
+// Why it does NOT apply directly: There is no price series. Placing ±2σ bands
+// around a single number's appearance count would produce near-zero variance
+// because each number appears only 6 times per 45 chances per draw.
+//
+// Reinterpretation — "Cross-Sectional Frequency Bands":
+//   Instead of time-series bands on one number, apply bands ACROSS all 45
+//   numbers at the same window W, treating the cross-sectional distribution
+//   of rolling frequencies as the data set.
+//
+//   rollingFreq(n, W) = count of appearances of n in last W draws
+//   μ_W = mean of {rollingFreq(n) : n = 1..45}
+//   σ_W = std dev of {rollingFreq(n) : n = 1..45}
+//
+//   Upper Band (UB) = μ_W + 2σ_W    ← unusually hot
+//   Lower Band (LB) = μ_W − 2σ_W    ← unusually cold
+//
+//   %B(n) = (rollingFreq(n) − LB) / (UB − LB)
+//     %B > 1.0 → above upper band → over-represented → reduce weight
+//     %B < 0.0 → below lower band → under-represented → boost weight
+//     %B = 0.5 → exactly at cross-sectional mean → neutral
+//
+// This is mathematically equivalent to a bounded Z-score across all numbers.
+// It complements the existing Z-score by using a rolling window rather than
+// all-time totals, making it more sensitive to recent distributional shifts.
+// ------------------------------------------------------------------
+function computeBollingerBands(results: LottoResult[], window = 30): Record<number, number> {
+  const W = Math.min(window, results.length);
+
+  const rollingFreqs: Record<number, number> = {};
+  for (let n = 1; n <= 45; n++) rollingFreqs[n] = 0;
+
+  for (let i = 0; i < W; i++) {
+    results[i].numbers.forEach(n => { rollingFreqs[n]++; });
+    rollingFreqs[results[i].bonus]++;
+  }
+
+  const freqValues = Object.values(rollingFreqs);
+  const mean   = freqValues.reduce((a, b) => a + b, 0) / 45;
+  const stdDev = Math.sqrt(freqValues.reduce((s, v) => s + (v - mean) ** 2, 0) / 45) || 1;
+
+  const upperBand = mean + 2 * stdDev;
+  const lowerBand = mean - 2 * stdDev;
+  const bandwidth = upperBand - lowerBand;
+
+  const pctB: Record<number, number> = {};
+  for (let n = 1; n <= 45; n++) {
+    pctB[n] = bandwidth > 0 ? (rollingFreqs[n] - lowerBand) / bandwidth : 0.5;
+  }
+  return pctB;
+}
+
+// ------------------------------------------------------------------
+// AROON ADAPTATION
+//
+// Finance: Aroon measures how many periods have elapsed since the highest (Aroon Up)
+// or lowest (Aroon Down) price within a lookback window to detect trend initiation
+// or exhaustion.
+//
+// Why it does NOT apply directly: There is no price high or price low for a
+// lottery number. "The highest value of ball number X in the last N draws"
+// has no meaning since the number is discrete and fixed (e.g., always "7").
+//
+// Reinterpretation — "Gap Recency Aroon":
+//   Replace "periods since price high" with "draws since last appearance":
+//
+//   AroonUp(n, W)   = ((W − drawsSinceLastSeen(n, W)) / W) × 100
+//     High AroonUp → appeared recently → trending active
+//     Low AroonUp  → not seen recently → cooling off
+//
+//   Replace "periods since price low" with "longest absence streak in window":
+//   AroonDown(n, W) = ((W − longestGap(n, W)) / W) × 100
+//     High AroonDown → recently had a long drought → pattern of cold streaks
+//     Low AroonDown  → no long droughts → consistently appearing
+//
+//   Aroon Oscillator = AroonUp − AroonDown  (range: −100 to +100)
+//     +100 → appeared very recently AND no long cold streaks → strongest momentum
+//     −100 → hasn't appeared recently AND had very long droughts → coldest signal
+//     ≈ 0  → mixed signals / consolidation
+// ------------------------------------------------------------------
+function computeAroon(results: LottoResult[], num: number, window = 30): number {
+  const W = Math.min(window, results.length);
+
+  let drawsSinceLastSeen = W; // default: never appeared in window
+  let longestGap  = 0;
+  let currentGap  = 0;
+
+  for (let i = 0; i < W; i++) {
+    const appeared = results[i].numbers.includes(num) || results[i].bonus === num;
+    if (appeared) {
+      if (drawsSinceLastSeen === W) drawsSinceLastSeen = i; // first (most recent) appearance
+      if (currentGap > longestGap) longestGap = currentGap;
+      currentGap = 0;
+    } else {
+      currentGap++;
+    }
+  }
+  if (currentGap > longestGap) longestGap = currentGap; // trailing gap at window end
+
+  const aroonUp   = ((W - drawsSinceLastSeen) / W) * 100;
+  const aroonDown = ((W - longestGap) / W) * 100;
+  return aroonUp - aroonDown; // oscillator
+}
+
+// ------------------------------------------------------------------
+// COMBINED TECHNICAL WEIGHT BUILDER
+//
+// Aggregates all four adapted indicators into a single composite weight
+// multiplier per number. Signals are additive via multiplication — each
+// indicator contributes a modest nudge (±5–12%) rather than a dominant
+// override, preserving the integrity of the base statistical weights.
+//
+// Weight contribution per indicator:
+//   MA signal  (−0.3 to +0.3)  → ×(1 ± 0.12 max)    via maSignal × 0.4
+//   RSI        (0–100)          → ×0.90/1.00/1.10      threshold-based
+//   Bollinger  %B (any real)    → ×0.92/scaled/1.08    band-based
+//   Aroon Osc  (−100 to +100)  → ×0.94/scaled/1.06    threshold-based
+//
+// Max combined boost ≈ ×1.38; max reduction ≈ ×0.73 (capped at [0.5, 2.0]).
+// Numbers with all four indicators aligned in the same direction receive
+// the strongest weight adjustment — a meaningful but non-deterministic signal.
+// ------------------------------------------------------------------
+export function buildTechnicalWeights(
+  results: LottoResult[],
+  maShortW   = 10,
+  maLongW    = 30,
+  rsiWindow  = 20,
+  bbWindow   = 30,
+  aroonWindow = 25
+): TechnicalIndicatorScore[] {
+  // Bollinger is cross-sectional — compute once for all 45 numbers
+  const bbPctB = computeBollingerBands(results, bbWindow);
+
+  return Array.from({ length: 45 }, (_, i) => {
+    const num = i + 1;
+
+    const maSignal       = computeLotteryMA(results, num, maShortW, maLongW);
+    const rsi            = computeLotteryRSI(results, num, rsiWindow);
+    const bollingerPctB  = bbPctB[num];
+    const aroonOscillator = computeAroon(results, num, aroonWindow);
+
+    // MA multiplier: signal × 0.4 translates ≈ ±0.3 signal → ±12% weight shift
+    const maBoost = 1.0 + maSignal * 0.4;
+
+    // RSI multiplier: mean-reversion logic (under-represented → boost)
+    let rsiBoost: number;
+    if      (rsi > 70) rsiBoost = 0.90;                          // overbought
+    else if (rsi < 30) rsiBoost = 1.10;                          // oversold
+    else               rsiBoost = 1.0 + (50 - rsi) / 50 * 0.05; // subtle linear in neutral zone
+
+    // Bollinger multiplier: frequency band deviation
+    let bbBoost: number;
+    if      (bollingerPctB > 1.0) bbBoost = 0.92;                          // above upper band
+    else if (bollingerPctB < 0.0) bbBoost = 1.08;                          // below lower band
+    else                          bbBoost = 1.0 + (0.5 - bollingerPctB) * 0.08; // in-band linear nudge
+
+    // Aroon multiplier: gap-recency momentum
+    let aroonBoost: number;
+    if      (aroonOscillator > 50)  aroonBoost = 1.06;                              // strong recent momentum
+    else if (aroonOscillator < -50) aroonBoost = 0.94;                              // cold-streak pattern
+    else                            aroonBoost = 1.0 + (aroonOscillator / 50) * 0.03; // subtle in-range nudge
+
+    const compositeBoost = Math.max(0.5, Math.min(2.0,
+      maBoost * rsiBoost * bbBoost * aroonBoost
+    ));
+
+    return { number: num, maSignal, rsi, bollingerPctB, aroonOscillator, compositeBoost };
+  });
+}
+
+// ==========================================
 // 5. STRATEGY ANALYSIS TYPES
 // ==========================================
 export interface StrategyTestResult {
@@ -536,7 +822,8 @@ function buildCombinedWeights(
   stats: LottoStats,
   goldenCandidates: number[],
   pareto: ParetoTiers,
-  opts?: OptimizedWeights
+  opts?: OptimizedWeights,
+  technicalScores?: TechnicalIndicatorScore[]  // MA × RSI × Bollinger × Aroon composite
 ): number[] {
   const gaussWeights = buildGaussianWeights(stats.frequencies);
   const maxPythFreq = Math.max(...Object.values(PYTHAGOREAN_FREQ), 1);
@@ -558,7 +845,10 @@ function buildCombinedWeights(
     const Gd = goldenCandidates.includes(num) ? goldenFactor : 1.0;
     const Py = 1.0 + (PYTHAGOREAN_FREQ[num] / maxPythFreq) * pythFactor;
     const Q  = 1.0 + (Math.random() - 0.5) * qNoise;
-    return Math.max(0.01, G * P * F * Gd * Py * Q);
+    // T: composite technical indicator multiplier (MA trend × RSI momentum × Bollinger band × Aroon recency)
+    // When undefined (e.g., inside backtestStrategies), defaults to 1.0 (no effect) for clean comparison.
+    const T  = technicalScores ? technicalScores[i].compositeBoost : 1.0;
+    return Math.max(0.01, G * P * F * Gd * Py * Q * T);
   });
 }
 
@@ -603,8 +893,8 @@ function buildSelectionReason(
   if (Math.abs(oddCount - whitson.targetOdd) <= 1) reasons.push(`Whitson 홀짝 패턴(${oddCount}:${6 - oddCount}) 일치`);
   if (pythInSet.length >= 2) reasons.push(`피타고라스 구조 수 [${pythInSet.join(',')}]`);
   return {
-    stage1_modelDesign: '피타고라스 비율 구조 · 피보나치/황금비 · 가우스 정규분포 · Pareto 80/20 · Whitson 패턴 반복 · 양자 요동 노이즈 — 6종 기법 통합 확률 최적화 모델',
-    stage2_calcLogic: `W(n) = G(μ,σ) × P(파레토 Tier) × F(피보나치 ${fibInSet.length > 0 ? '✓' : '-'}) × φ(황금비 ${goldenInSet.length > 0 ? '✓' : '-'}) × Py(피타고라스) × Q(양자노이즈) → 룰렛 휠 가중 샘플링 → Python 6종 필터 검증`,
+    stage1_modelDesign: '피타고라스 비율 구조 · 피보나치/황금비 · 가우스 정규분포 · Pareto 80/20 · Whitson 패턴 반복 · 양자 요동 노이즈 · Z-Score · 동반출현 · MA빈도추세 · RSI빈도모멘텀 · 볼린저밴드 · Aroon갭재귀 — 12종 기법 통합 확률 최적화 모델',
+    stage2_calcLogic: `W(n) = G(μ,σ) × P(파레토 Tier) × F(피보나치 ${fibInSet.length > 0 ? '✓' : '-'}) × φ(황금비 ${goldenInSet.length > 0 ? '✓' : '-'}) × Py(피타고라스) × Q(양자노이즈) × Z(Z-Score) × C(동반출현) × T(MA×RSI×BB×Aroon) → 룰렛 휠 가중 샘플링 → Python 6종 필터 검증`,
     stage3_setReason: `합계 ${sum} | 홀짝 ${oddCount}:${6 - oddCount} | 고저 ${highCount}:${6 - highCount} | ${reasons.length > 0 ? reasons.join(' · ') : '가우스 분포 중심 기반 균형 조합'}`,
   };
 }
@@ -899,12 +1189,25 @@ export function generateQuantumFlux(
     }
   });
 
-  const methodLabels = ['피타고라스 비율', '피보나치/황금비(φ)', '가우스 정규분포', 'Pareto 80/20', 'Whitson 패턴법칙', '양자 요동 노이즈', 'Z-Score 보정', '동반출현(Co-Occurrence) 시너지'];
+  // Technical Indicator Weights (MA, RSI, Bollinger Bands, Aroon)
+  // Computed once here and passed into every buildCombinedWeights call below.
+  // Each indicator is reinterpreted for frequency-based lottery analysis:
+  //   MA        → short/long rolling appearance-rate crossover (frequency trend)
+  //   RSI       → appearance-momentum ratio (over/under-represented recently)
+  //   Bollinger → cross-sectional frequency band deviation across all 45 numbers
+  //   Aroon     → gap-recency oscillator (how recently vs how long since drought)
+  const technicalScores = buildTechnicalWeights(results);
+
+  const methodLabels = [
+    '피타고라스 비율', '피보나치/황금비(φ)', '가우스 정규분포', 'Pareto 80/20',
+    'Whitson 패턴법칙', '양자 요동 노이즈', 'Z-Score 보정', '동반출현(Co-Occurrence) 시너지',
+    'MA 빈도추세(이동평균)', 'RSI 빈도모멘텀', '볼린저밴드 횡단면편차', 'Aroon 갭재귀지표',
+  ];
   const optimizedTag = opts ? ['[최적화 가중치 적용]'] : [];
 
   // 경로 A: GitHub 조합 가중 스코어링
   if (githubCombinations.length > 0) {
-    const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts);
+    const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts, technicalScores);
     const scored = githubCombinations
       .filter(combo => passesPythonFilters(combo))
       .map(combo => ({ combo, score: combo.reduce((sum, n) => sum + (weights[n - 1] ?? 0), 0) }))
@@ -921,7 +1224,7 @@ export function generateQuantumFlux(
   // 경로 B: 직접 생성
   let attempts = 2000;
   while (attempts > 0) {
-    const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts);
+    const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts, technicalScores);
     
     // Z-Score 보정: 과도하게 적게 나오거나(Z < -1.5) 과도하게 많이 나온(Z > 1.5) 번호의 가중치를 미세 조정
     for (let i = 0; i < 45; i++) {

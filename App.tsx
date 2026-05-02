@@ -407,7 +407,7 @@ const App: React.FC = () => {
             <span>🌌</span> 양자 변동 번호 추천
           </h2>
           <p className="text-gray-400 text-xs sm:text-sm mb-8 max-w-2xl break-keep">
-            피타고라스·피보나치/황금비(φ)·가우스 정규분포·Pareto 80/20·Whitson 패턴법칙·양자 요동 노이즈·<strong className="text-purple-300">Z-Score 통계보정</strong>·<strong className="text-purple-300">동반출현 시너지</strong>의 <strong className="text-purple-300">8종 수학/통계 기법</strong>을 W(n)=G×P×F×φ×Py×Q×Z×C 공식으로 통합한 뒤, Python 6종 고급 필터를 통과한 확률 최적화 조합만 추출합니다.
+            피타고라스·피보나치/황금비(φ)·가우스 정규분포·Pareto 80/20·Whitson 패턴법칙·양자 요동 노이즈·<strong className="text-purple-300">Z-Score 통계보정</strong>·<strong className="text-purple-300">동반출현 시너지</strong>·<strong className="text-blue-300">MA 빈도추세</strong>·<strong className="text-blue-300">RSI 빈도모멘텀</strong>·<strong className="text-blue-300">볼린저밴드 편차</strong>·<strong className="text-blue-300">Aroon 갭재귀</strong>의 <strong className="text-purple-300">12종 수학/통계 기법</strong>을 W(n)=G×P×F×φ×Py×Q×Z×C×T 공식으로 통합한 뒤, Python 6종 고급 필터를 통과한 확률 최적화 조합만 추출합니다.
           </p>
 
           <div className="w-full flex flex-col md:flex-row items-center justify-center gap-4 mb-8">
