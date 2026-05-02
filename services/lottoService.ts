@@ -1211,7 +1211,8 @@ export async function backtestStrategies(
 export function generateQuantumFlux(
   results: LottoResult[],
   githubCombinations: number[][] = [],
-  opts?: OptimizedWeights
+  opts?: OptimizedWeights,
+  fixedNumbers: number[] = []   // 반드시 포함할 번호 (최대 5개)
 ): PredictionResult {
   const stats = analyzeLotto(results);
   const recentAvgNum = Math.round((results[0]?.numbers.reduce((a, b) => a + b, 0) ?? 138) / 6);
@@ -1271,7 +1272,11 @@ export function generateQuantumFlux(
   if (githubCombinations.length > 0) {
     const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts, technicalScores);
     const scored = githubCombinations
-      .filter(combo => passesPythonFilters(combo))
+      .filter(combo => {
+        // 고정 번호가 있을 경우 해당 번호를 모두 포함하는 조합만 허용
+        if (fixedNumbers.length > 0 && !fixedNumbers.every(n => combo.includes(n))) return false;
+        return passesPythonFilters(combo);
+      })
       .map(combo => ({ combo, score: combo.reduce((sum, n) => sum + (weights[n - 1] ?? 0), 0) }))
       .sort((a, b) => b.score - a.score);
 
@@ -1295,7 +1300,17 @@ export function generateQuantumFlux(
       else if (z < -1.5) weights[i] *= 1.15; // 너무 안 나온 번호는 약간의 가산점 (회귀 기대)
     }
 
-    let candidates = weightedRandomSelect(weights, 6);
+    let candidates: number[];
+    if (fixedNumbers.length > 0) {
+      // 고정 번호는 확정, 나머지 (6 - fixed) 개만 가중치 선택
+      // 고정 번호의 가중치를 0으로 설정해 중복 선택 방지
+      const wCopy = [...weights];
+      fixedNumbers.forEach(n => { wCopy[n - 1] = 0; });
+      const remaining = weightedRandomSelect(wCopy, 6 - fixedNumbers.length);
+      candidates = [...new Set([...fixedNumbers, ...remaining])].sort((a, b) => a - b);
+    } else {
+      candidates = weightedRandomSelect(weights, 6);
+    }
 
     // 동반 출현 시너지 보정: 선택된 6개의 번호 간의 동반 출현 점수를 계산하여 기준 미달이면 다시 뽑기
     // 전체 쌍(15개)의 평균 동반 출현 횟수가 전체 회차 대비 일정 비율 이상이어야 함

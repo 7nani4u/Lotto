@@ -68,7 +68,8 @@ const App: React.FC = () => {
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
   const [freqPage, setFreqPage] = useState(0);
-  const [filterNumbers, setFilterNumbers] = useState<number[]>([]);
+  const [fixedNumbers, setFixedNumbers] = useState<number[]>([]);
+  const [fixedInput, setFixedInput] = useState('');
 
   useEffect(() => {
     try {
@@ -202,7 +203,7 @@ const App: React.FC = () => {
     });
 
     const nextPredictions = generateUniquePredictionSet(
-      () => generateQuantumFlux(allData, githubCombinations, mergedWeights),
+      () => generateQuantumFlux(allData, githubCombinations, mergedWeights, fixedNumbers),
       combinationCount
     );
 
@@ -440,39 +441,68 @@ const App: React.FC = () => {
             )}
           </div>
 
-          {/* ── 선택 번호 필터 ── */}
-          <div className="w-full md:w-2/3 mb-6 bg-gray-900/60 border border-purple-900/40 rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-bold text-purple-300">선택 번호 필터</span>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">
-                  {filterNumbers.length > 0 ? `${filterNumbers.sort((a,b)=>a-b).join(', ')} 선택됨` : '선택 없음 (전체 표시)'}
-                </span>
-                {filterNumbers.length > 0 && (
+          {/* ── 고정 번호 설정 ── */}
+          {(() => {
+            const addFixed = () => {
+              const n = parseInt(fixedInput, 10);
+              if (!isNaN(n) && n >= 1 && n <= 45 && !fixedNumbers.includes(n) && fixedNumbers.length < 5) {
+                setFixedNumbers(prev => [...prev, n].sort((a, b) => a - b));
+              }
+              setFixedInput('');
+            };
+            return (
+              <div className="w-full md:w-2/3 mb-6 bg-gray-900/60 border border-purple-900/40 rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-sm font-bold text-purple-300">고정 번호 설정</span>
+                  <span className="text-[11px] text-gray-500">추출 시 모든 조합에 반드시 포함 · 최대 5개</span>
+                </div>
+
+                {/* 선택된 번호 칩 */}
+                <div className="flex flex-wrap items-center gap-2 my-3 min-h-[36px]">
+                  {fixedNumbers.length === 0
+                    ? <span className="text-xs text-gray-600">없음 — 모든 번호를 알고리즘이 자동 선택합니다</span>
+                    : fixedNumbers.map(n => {
+                        const chipCls = n <= 10 ? 'bg-yellow-600' : n <= 20 ? 'bg-blue-600' : n <= 30 ? 'bg-red-600' : n <= 40 ? 'bg-gray-500' : 'bg-green-600';
+                        return (
+                          <span key={n} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full ${chipCls} text-white text-sm font-black`}>
+                            {n}
+                            <button
+                              onClick={() => setFixedNumbers(prev => prev.filter(x => x !== n))}
+                              className="text-white/70 hover:text-white leading-none ml-0.5"
+                            >×</button>
+                          </span>
+                        );
+                      })
+                  }
+                </div>
+
+                {/* 번호 입력 */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1} max={45}
+                    value={fixedInput}
+                    onChange={e => setFixedInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') addFixed(); }}
+                    placeholder="1 ~ 45"
+                    disabled={fixedNumbers.length >= 5}
+                    className="w-24 bg-gray-800 text-white text-sm rounded-lg px-3 py-2 border border-gray-600 outline-none disabled:opacity-40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
                   <button
-                    onClick={() => setFilterNumbers([])}
-                    className="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 transition-colors"
-                  >초기화</button>
-                )}
+                    onClick={addFixed}
+                    disabled={fixedNumbers.length >= 5 || fixedInput === ''}
+                    className="px-4 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-sm font-bold transition-colors disabled:opacity-40"
+                  >추가</button>
+                  {fixedNumbers.length > 0 && (
+                    <button
+                      onClick={() => setFixedNumbers([])}
+                      className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors"
+                    >초기화</button>
+                  )}
+                </div>
               </div>
-            </div>
-            <p className="text-[11px] text-gray-500 mb-3">번호를 클릭하면 해당 번호가 포함된 조합만 표시됩니다 (OR 조건)</p>
-            <div className="grid grid-cols-9 gap-1">
-              {Array.from({ length: 45 }, (_, i) => i + 1).map(n => {
-                const selected = filterNumbers.includes(n);
-                const ballCls = n <= 10 ? 'bg-yellow-700' : n <= 20 ? 'bg-blue-700' : n <= 30 ? 'bg-red-700' : n <= 40 ? 'bg-gray-600' : 'bg-green-700';
-                return (
-                  <button
-                    key={n}
-                    onClick={() => setFilterNumbers(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])}
-                    className={`w-full aspect-square rounded-md text-[11px] font-bold transition-all ${selected ? `${ballCls} text-white ring-2 ring-white scale-105` : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-                  >
-                    {n}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+            );
+          })()}
 
           <button
             onClick={() => { void handleGenerateQuantum(); }}
@@ -495,57 +525,49 @@ const App: React.FC = () => {
           )}
 
           {quantumPredictions.length > 0 && (
-            <>
-              {/* 필터 적용 시 매칭 결과 수 표시 */}
-              {filterNumbers.length > 0 && (
-                <div className="w-full md:w-2/3 mb-4 text-sm text-purple-300 text-center">
-                  {quantumPredictions.filter(p => filterNumbers.some(n => p.numbers.includes(n))).length}개 조합 표시 중
-                  <span className="text-gray-500 text-xs ml-2">(전체 {quantumPredictions.length}개 중)</span>
-                </div>
-              )}
-              <div className="w-full grid grid-cols-1 xl:grid-cols-2 gap-4 animate-fade-in">
-                {quantumPredictions.map((prediction, index) => {
-                  const matchedNums = filterNumbers.filter(n => prediction.numbers.includes(n));
-                  if (filterNumbers.length > 0 && matchedNums.length === 0) return null;
-                  return (
-                    <div key={prediction.numbers.join('-')} className="bg-gray-900/80 rounded-2xl p-6 border border-purple-900/50 shadow-inner">
-                      <div className="flex items-center justify-between mb-4">
-                        <div className="text-sm text-purple-300 font-bold">양자 조합 #{index + 1}</div>
-                        {matchedNums.length > 0 && (
-                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-900/60 text-emerald-300 border border-emerald-700">
-                            선택 번호 {matchedNums.sort((a,b)=>a-b).join(', ')} 포함
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-nowrap justify-center gap-2 sm:gap-3 md:gap-4 mb-6">
-                        {prediction.numbers.map((num, i) => (
-                          <Ball key={i} num={num} onClick={() => handleBallClick(num)} />
-                        ))}
-                      </div>
+            <div className="w-full grid grid-cols-1 xl:grid-cols-2 gap-4 animate-fade-in">
+              {quantumPredictions.map((prediction, index) => {
+                const fixedInCombo = fixedNumbers.filter(n => prediction.numbers.includes(n));
+                return (
+                  <div key={prediction.numbers.join('-')} className="bg-gray-900/80 rounded-2xl p-6 border border-purple-900/50 shadow-inner">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="text-sm text-purple-300 font-bold">양자 조합 #{index + 1}</div>
+                      {fixedInCombo.length > 0 && (
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-900/60 text-amber-300 border border-amber-700">
+                          고정 {fixedInCombo.join(', ')} 포함
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-nowrap justify-center gap-2 sm:gap-3 md:gap-4 mb-6">
+                      {prediction.numbers.map((num, i) => (
+                        <div key={i} className={fixedNumbers.includes(num) ? 'ring-2 ring-amber-400 rounded-full' : ''}>
+                          <Ball num={num} onClick={() => handleBallClick(num)} />
+                        </div>
+                      ))}
+                    </div>
 
-                      <div className="grid grid-cols-2 gap-4 text-sm text-gray-300 border-t border-gray-700/50 pt-6">
-                        <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
-                          <div className="text-gray-400 mb-2 font-medium">총합</div>
-                          <div className="text-2xl font-black text-white">{prediction.stats.sum}</div>
-                        </div>
-                        <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
-                          <div className="text-gray-400 mb-2 font-medium">AI 신뢰도</div>
-                          <div className="text-2xl font-black text-purple-400">{prediction.confidence}%</div>
-                        </div>
-                        <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
-                          <div className="text-gray-400 mb-2 font-medium">홀짝 비율</div>
-                          <div className="text-2xl font-black text-blue-300">{prediction.stats.oddEvenRatio}</div>
-                        </div>
-                        <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
-                          <div className="text-gray-400 mb-2 font-medium">고저 비율</div>
-                          <div className="text-2xl font-black text-purple-300">{prediction.stats.highLowRatio}</div>
-                        </div>
+                    <div className="grid grid-cols-2 gap-4 text-sm text-gray-300 border-t border-gray-700/50 pt-6">
+                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                        <div className="text-gray-400 mb-2 font-medium">총합</div>
+                        <div className="text-2xl font-black text-white">{prediction.stats.sum}</div>
+                      </div>
+                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                        <div className="text-gray-400 mb-2 font-medium">AI 신뢰도</div>
+                        <div className="text-2xl font-black text-purple-400">{prediction.confidence}%</div>
+                      </div>
+                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                        <div className="text-gray-400 mb-2 font-medium">홀짝 비율</div>
+                        <div className="text-2xl font-black text-blue-300">{prediction.stats.oddEvenRatio}</div>
+                      </div>
+                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                        <div className="text-gray-400 mb-2 font-medium">고저 비율</div>
+                        <div className="text-2xl font-black text-purple-300">{prediction.stats.highLowRatio}</div>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            </>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
 
