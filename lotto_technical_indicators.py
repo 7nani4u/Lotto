@@ -1,26 +1,35 @@
+# -*- coding: utf-8 -*-
 """
 lotto_technical_indicators.py
-─────────────────────────────────────────────────────────────────────────────
-한국 로또 6/45 기술 지표 적용 분석 모듈
+════════════════════════════════════════════════════════════════════════════════
+한국 로또 6/45 — 기술적 지표 기반 통계 패턴 분석 시스템
 
-금융 기술 지표(MA, RSI, 볼린저밴드, Aroon, Z-Score)를 복권 빈도 분석에
-맞게 재해석하여 번호별 확률적 가중치를 산출합니다.
+[분석 철학]
+  복권 추첨은 이론적으로 완전한 독립 사건입니다. 그러나 과거 데이터에서
+  관찰되는 번호별 출현 빈도 편차는 단기적으로 통계적 불균형을 만듭니다.
+  본 시스템은 이 불균형을 "평균 회귀(Mean Reversion)" 가설 아래 분석합니다.
 
-핵심 전제:
-  ─ 복권 추첨은 독립 사건이다 (시계열 추세 없음).
-  ─ 각 지표는 가격 추세가 아닌 빈도 통계를 추적한다.
-  ─ 모든 가중치는 확률적 '힌트'이며, 당첨을 보장하지 않는다.
+  평균 회귀 가설:
+    장기적으로 각 번호의 출현율은 이론값(6/45 ≈ 13.3%)에 수렴한다.
+    따라서 현재 출현율이 이론값보다 낮은 번호는 향후 출현 가능성이
+    상대적으로 높을 수 있다.
 
-섹션 구조:
-  1. 데이터 구조 및 샘플 생성
-  2. 이동평균 (Frequency MA)
-  3. RSI (Appearance Momentum RSI)
-  4. 볼린저 밴드 (Cross-Sectional Frequency Bands)
-  5. 아룬 (Gap Recency Aroon)
-  6. Z-Score (기존 지표 재평가 + 개선)
-  7. 통합 스코어링 엔진
-  8. 번호 순위 및 추천
-─────────────────────────────────────────────────────────────────────────────
+  ⚠️ 중요: 이 분석은 통계적 패턴 해석이며, 실제 당첨 확률과는 무관합니다.
+           복권은 매 회차 독립 추첨이므로 과거 패턴이 미래를 보장하지 않습니다.
+
+[지표 채택 이유 및 가중치]
+  ┌──────────────────┬────────┬───────────────────────────────────────────┐
+  │ 지표              │ 가중치  │ 채택 이유                                   │
+  ├──────────────────┼────────┼───────────────────────────────────────────┤
+  │ Z-Score          │  30%   │ 전체 누적 데이터 기반, 가장 안정적인 편차 측정  │
+  │ 볼린저밴드 %B     │  25%   │ 최근 롤링 기반 횡단면 편차, Z의 단기 보완판    │
+  │ RSI              │  20%   │ 최근 출현 모멘텀, 직관적 과매수/과매도 신호    │
+  │ MA 크로스오버     │  15%   │ 단/장기 빈도 추세 방향 비교                  │
+  │ Aroon 오실레이터  │  10%   │ 갭 재귀성 (가장 약한 신호, 보조 참고용)       │
+  └──────────────────┴────────┴───────────────────────────────────────────┘
+
+  종합점수 = 0.30×Z점수 + 0.25×BB점수 + 0.20×RSI점수 + 0.15×MA점수 + 0.10×Aroon점수
+════════════════════════════════════════════════════════════════════════════════
 """
 
 from __future__ import annotations
@@ -29,53 +38,68 @@ import math
 import random
 import statistics
 import sys
-from dataclasses import dataclass, field
-from typing import Sequence
+from dataclasses import dataclass
+from typing import Optional
 
-# Windows 콘솔에서 한글/유니코드 출력이 깨지는 문제 방지
+# Windows 콘솔 한글/유니코드 출력 호환
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. 데이터 구조
-# ─────────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════════
+# §0. 데이터 구조 정의
+# ════════════════════════════════════════════════════════════════════════════════
 
 @dataclass
 class DrawResult:
-    """단일 회차 당첨 결과."""
+    """단일 회차 당첨 번호."""
     round: int
-    numbers: list[int]   # 본 번호 6개 (정렬 불필요)
-    bonus: int           # 보너스 번호
+    numbers: list[int]  # 본 번호 6개
+    bonus:   int        # 보너스 번호
 
 
 @dataclass
-class TechnicalScore:
-    """번호 하나에 대한 전체 기술 지표 점수."""
+class IndicatorValues:
+    """번호 하나에 대한 5개 지표의 원시값."""
     number: int
 
-    # ── 개별 지표 값 ──────────────────────────────────────────────
-    ma_signal: float        # 단기MA − 장기MA: 양수 = 상승 모멘텀
-    rsi: float              # 0–100: <30 과소출현(과매도), >70 과다출현(과매수)
-    bollinger_pct_b: float  # %B: <0 하단밴드 하회, >1 상단밴드 상회
-    aroon_oscillator: float # −100 ~ +100: 양수 = 최근 출현, 음수 = 장기 공백
-    z_score: float          # 표준 Z-Score (전체 누적 기준)
-
-    # ── 각 지표의 개별 가중치 승수 ────────────────────────────────
-    ma_boost: float         = 1.0
-    rsi_boost: float        = 1.0
-    bb_boost: float         = 1.0
-    aroon_boost: float      = 1.0
-    z_boost: float          = 1.0
-
-    # ── 5개 지표를 곱한 최종 복합 가중치 ─────────────────────────
-    composite_boost: float  = 1.0
+    # ── 원시 지표 값 ────────────────────────────────────────────────
+    ma_signal:         float   # 단기MA − 장기MA: 양수 = 최근 빈도 증가 추세
+    rsi:               float   # 0~100: <30 과소출현, >70 과다출현
+    bollinger_pct_b:   float   # %B: <0 하단밴드 하회, 0.5 중앙, >1 상단밴드 초과
+    aroon_oscillator:  float   # −100~+100: 양수 = 최근 출현, 음수 = 장기 공백
+    z_score:           float   # 표준 Z-Score: 음수 = 누적 과소출현
 
 
-def make_sample_draws(n_rounds: int = 200, seed: int = 42) -> list[DrawResult]:
+@dataclass
+class ScoredNumber:
+    """번호 하나의 5개 지표 점수 및 종합점수 (모두 0~100 정규화)."""
+    number: int
+
+    # ── 원시값 (해석용) ──────────────────────────────────────────────
+    raw: IndicatorValues
+
+    # ── 정규화 점수 (0~100, 높을수록 평균 회귀 가능성 높음) ─────────────
+    score_ma:      float  # MA 크로스오버 점수
+    score_rsi:     float  # RSI 점수
+    score_bb:      float  # 볼린저밴드 %B 점수
+    score_aroon:   float  # Aroon 오실레이터 점수
+    score_z:       float  # Z-Score 점수
+
+    # ── 종합점수 (가중 평균) ─────────────────────────────────────────
+    composite: float      # 0~100: 높을수록 상대적 출현 가능성 높음
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# §1. 샘플 데이터 생성기 (실제 환경에서는 API/CSV 로더로 대체)
+# ════════════════════════════════════════════════════════════════════════════════
+
+def make_sample_draws(n_rounds: int = 300, seed: int = 42) -> list[DrawResult]:
     """
-    실제 데이터가 없을 때 사용하는 샘플 회차 생성기.
-    실제 사용 시 이 함수를 API / CSV 로더로 대체하십시오.
+    실제 데이터 없을 때 사용하는 무작위 샘플 회차 생성기.
+
+    실제 사용 방법:
+        draws = load_from_csv("lotto_history.csv")  # 또는 API 호출
     """
     rng = random.Random(seed)
     draws: list[DrawResult] = []
@@ -84,703 +108,690 @@ def make_sample_draws(n_rounds: int = 200, seed: int = 42) -> list[DrawResult]:
         rng.shuffle(pool)
         picks = sorted(pool[:7])
         draws.append(DrawResult(round=rnd, numbers=picks[:6], bonus=picks[6]))
-    # 최신 회차가 인덱스 0에 오도록 역순 정렬 (실제 데이터와 동일한 관례)
-    draws.reverse()
+    draws.reverse()  # 최신 회차가 인덱스 0에 위치 (관례)
     return draws
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. 이동평균 적용 (Frequency Moving Average)
-# ─────────────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════════
+# §2. 지표별 원시값 계산 함수
+# ════════════════════════════════════════════════════════════════════════════════
 
-def compute_lottery_ma(
-    draws: list[DrawResult],
-    num: int,
-    short_window: int = 10,
-    long_window: int  = 30,
-    include_bonus: bool = True,
-) -> float:
+def _appears(draw: DrawResult, num: int, include_bonus: bool) -> bool:
+    """해당 회차에 번호가 출현했는지 확인."""
+    return num in draw.numbers or (include_bonus and draw.bonus == num)
+
+
+# ── §2-1. 이동평균 (Frequency MA) ────────────────────────────────────────────
+def calc_ma(draws: list[DrawResult], num: int,
+            short_w: int = 10, long_w: int = 30,
+            include_bonus: bool = True) -> float:
     """
     빈도 이동평균 크로스오버 신호를 반환합니다.
 
-    [금융 MA와의 차이]
-    금융 MA → 가격의 시간 평균 (연속형 수치 평활화)
-    복권 MA  → 출현 이진 시퀀스의 롤링 비율 비교
+    [원리] 각 회차를 이진 신호(출현=1, 미출현=0)로 변환 후
+           단기(short_w) 평균과 장기(long_w) 평균의 차이를 계산합니다.
 
-    [수식]
-    MA(n, W) = (1/W) × Σ I(n ∈ draw_i),  i = 0..W-1
-    Signal   = MA(n, short_W) − MA(n, long_W)
-
-    Signal > 0 → 단기 빈도 > 장기 빈도 → 상승 크로스오버 (가중치 ↑)
-    Signal < 0 → 단기 빈도 < 장기 빈도 → 하락 크로스오버 (가중치 ↓)
-
-    반환값 범위: 이론적으로 ≈ [−0.3, +0.3] (6/45 게임 특성상)
+    반환값: 단기MA − 장기MA
+      양수 → 최근 출현 빈도가 장기 평균보다 높음 (상승 추세)
+      음수 → 최근 출현 빈도가 장기 평균보다 낮음 (하락 추세, 회귀 가능성)
     """
-    sw = min(short_window, len(draws))
-    lw = min(long_window,  len(draws))
-
-    short_count = 0
-    long_count  = 0
-
-    for i in range(lw):
-        appeared = num in draws[i].numbers or (include_bonus and draws[i].bonus == num)
-        if i < sw:
-            short_count += int(appeared)
-        long_count += int(appeared)
-
-    short_ma = short_count / sw if sw > 0 else 0.0
-    long_ma  = long_count  / lw if lw > 0 else 0.0
-
-    return short_ma - long_ma
+    sw = min(short_w, len(draws))
+    lw = min(long_w,  len(draws))
+    short_cnt = sum(1 for i in range(sw) if _appears(draws[i], num, include_bonus))
+    long_cnt  = sum(1 for i in range(lw) if _appears(draws[i], num, include_bonus))
+    return (short_cnt / sw) - (long_cnt / lw)
 
 
-def ma_to_boost(signal: float, scale: float = 0.4) -> float:
-    """
-    MA 신호 → 가중치 승수 변환.
-
-    signal × scale 로 최대 ±(scale × 0.3) ≈ ±12% 조정.
-    예: signal = +0.20 → boost = 1.08 (8% 상향)
-        signal = −0.15 → boost = 0.94 (6% 하향)
-    """
-    return max(0.5, min(2.0, 1.0 + signal * scale))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. RSI 적용 (Appearance Momentum RSI)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def compute_lottery_rsi(
-    draws: list[DrawResult],
-    num: int,
-    window: int = 20,
-    include_bonus: bool = True,
-) -> float:
+# ── §2-2. RSI (Appearance Momentum RSI) ──────────────────────────────────────
+def calc_rsi(draws: list[DrawResult], num: int,
+             window: int = 20, include_bonus: bool = True) -> float:
     """
     출현 모멘텀 RSI를 반환합니다 (0~100).
 
-    [금융 RSI와의 차이]
-    금융 RSI → 가격 변화의 크기(magnitude) 비율 분석
-    복권 RSI → 출현/미출현 이진 비율 분석
+    [원리]
+      appearances(출현 횟수) / absences(미출현 횟수) = RS
+      RSI = 100 − 100 / (1 + RS)
 
-    [수식]
-    appearances = Σ I(n ∈ draw_i),  i = 0..W-1
-    absences    = W − appearances
-
-    RS  = appearances / absences
-    RSI = 100 − (100 / (1 + RS))
-
-    RSI > 70 → 과다출현 (과매수) → 평균 회귀 기대 → 가중치 억제
-    RSI < 30 → 과소출현 (과매도) → 회귀 기대    → 가중치 상향
-
-    주의: RSI가 높다고 번호를 "무조건 피하라"는 의미가 아님.
-    복권은 독립 사건이므로 이는 약한 통계적 편향 신호에 불과합니다.
+      RSI > 70 → 과다출현 (과매수): 최근 너무 자주 나옴 → 억제 가능성
+      RSI < 30 → 과소출현 (과매도): 최근 거의 안 나옴 → 회귀 가능성
     """
     w = min(window, len(draws))
-    appearances = 0
-
-    for i in range(w):
-        if num in draws[i].numbers or (include_bonus and draws[i].bonus == num):
-            appearances += 1
-
-    absences = w - appearances
-
-    if absences == 0:
-        return 100.0  # 매 회차 출현 → 극단적 과다출현
-    if appearances == 0:
-        return 0.0    # 단 한 번도 출현 안 함 → 극단적 과소출현
-
-    rs = appearances / absences
+    appeared = sum(1 for i in range(w) if _appears(draws[i], num, include_bonus))
+    absent   = w - appeared
+    if absent == 0:   return 100.0
+    if appeared == 0: return 0.0
+    rs = appeared / absent
     return 100.0 - (100.0 / (1.0 + rs))
 
 
-def rsi_to_boost(rsi: float) -> float:
+# ── §2-3. 볼린저밴드 (Cross-Sectional Frequency Bands) ───────────────────────
+def calc_bollinger_all(draws: list[DrawResult], window: int = 30,
+                       include_bonus: bool = True) -> dict[int, float]:
     """
-    RSI 값 → 가중치 승수 변환 (평균 회귀 논리 적용).
+    전체 45개 번호에 대한 볼린저 %B를 한 번에 계산합니다.
 
-    RSI > 70 → ×0.90 (10% 억제)
-    RSI < 30 → ×1.10 (10% 상향)
-    중립 구간 → 50 기준 선형 미세 조정 (최대 ±5%)
-    """
-    if rsi > 70:
-        return 0.90
-    if rsi < 30:
-        return 1.10
-    # 중립 구간: RSI=50 → boost=1.0, 선형 보간
-    return 1.0 + (50.0 - rsi) / 50.0 * 0.05
+    [원리] 개별 번호의 시계열 밴드가 아닌, 같은 윈도우 내
+           45개 번호 전체의 빈도 분포를 횡단면으로 분석합니다.
 
+      롤링빈도(n, W) = 최근 W회차 동안 번호 n의 출현 횟수
+      μ = 45개 번호의 롤링빈도 평균
+      σ = 45개 번호의 롤링빈도 표준편차
+      상단밴드(UB) = μ + 2σ,  하단밴드(LB) = μ − 2σ
+      %B(n) = (롤링빈도(n) − LB) / (UB − LB)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. 볼린저 밴드 적용 (Cross-Sectional Frequency Bands)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def compute_bollinger_bands(
-    draws: list[DrawResult],
-    window: int = 30,
-    include_bonus: bool = True,
-) -> dict[int, float]:
-    """
-    전체 45개 번호에 대한 볼린저 %B 딕셔너리를 반환합니다.
-
-    [금융 볼린저 밴드와의 차이]
-    금융 BB    → 단일 가격 시계열의 시간축 방향 ±2σ 밴드
-    복권 BB    → 45개 번호 전체의 횡단면 빈도 분포 ±2σ 밴드
-
-    [수식]
-    rollingFreq(n, W) = W 회차 동안 번호 n의 출현 횟수
-
-    μ_W = mean({rollingFreq(n) : n = 1..45})    ← 횡단면 평균
-    σ_W = std ({rollingFreq(n) : n = 1..45})    ← 횡단면 표준편차
-
-    UB = μ_W + 2σ_W
-    LB = μ_W − 2σ_W
-
-    %B(n) = (rollingFreq(n) − LB) / (UB − LB)
-      %B > 1.0 → 상단 밴드 초과 (과다출현)
-      %B < 0.0 → 하단 밴드 미달 (과소출현)
-      %B = 0.5 → 횡단면 평균 (중립)
-
-    Z-Score와의 차이: Z-Score는 전체 누적 기준,
-    Bollinger %B는 최근 W회차만 반영 → 최근 추세에 더 민감.
+      %B < 0 → 하단밴드 하회 (횡단면 과소출현)
+      %B > 1 → 상단밴드 초과 (횡단면 과다출현)
     """
     w = min(window, len(draws))
-
-    # 각 번호의 롤링 빈도 계산
-    rolling_freq: dict[int, int] = {n: 0 for n in range(1, 46)}
+    freq: dict[int, int] = {n: 0 for n in range(1, 46)}
     for i in range(w):
         for n in draws[i].numbers:
-            rolling_freq[n] += 1
+            freq[n] += 1
         if include_bonus:
-            rolling_freq[draws[i].bonus] += 1
+            freq[draws[i].bonus] += 1
 
-    freq_values = list(rolling_freq.values())
-    mu = statistics.mean(freq_values)
-    sigma = statistics.pstdev(freq_values) or 1.0  # 모집단 표준편차
-
-    upper_band = mu + 2 * sigma
-    lower_band = mu - 2 * sigma
-    bandwidth  = upper_band - lower_band
-
-    pct_b: dict[int, float] = {}
-    for n in range(1, 46):
-        if bandwidth > 0:
-            pct_b[n] = (rolling_freq[n] - lower_band) / bandwidth
-        else:
-            pct_b[n] = 0.5  # 분산이 0일 경우 (이론상 불가)
-    return pct_b
+    vals  = list(freq.values())
+    mu    = statistics.mean(vals)
+    sigma = statistics.pstdev(vals) or 1.0
+    ub = mu + 2 * sigma
+    lb = mu - 2 * sigma
+    bw = ub - lb or 1.0
+    return {n: (freq[n] - lb) / bw for n in range(1, 46)}
 
 
-def bb_to_boost(pct_b: float) -> float:
-    """
-    볼린저 %B → 가중치 승수 변환.
-
-    %B > 1.0 → ×0.92 (8% 억제)
-    %B < 0.0 → ×1.08 (8% 상향)
-    인밴드   → %B=0.5 기준 선형 미세 조정 (최대 ±4%)
-    """
-    if pct_b > 1.0:
-        return 0.92
-    if pct_b < 0.0:
-        return 1.08
-    # 인밴드 선형 보간: pct_b=0.5 → 1.0, pct_b=0→1.04, pct_b=1→0.96
-    return 1.0 + (0.5 - pct_b) * 0.08
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. 아룬 지표 적용 (Gap Recency Aroon)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def compute_aroon(
-    draws: list[DrawResult],
-    num: int,
-    window: int = 30,
-    include_bonus: bool = True,
-) -> float:
+# ── §2-4. Aroon (Gap Recency Aroon) ──────────────────────────────────────────
+def calc_aroon(draws: list[DrawResult], num: int,
+               window: int = 30, include_bonus: bool = True) -> float:
     """
     갭 재귀 아룬 오실레이터를 반환합니다 (−100 ~ +100).
 
-    [금융 아룬과의 차이]
-    금융 Aroon → "N기간 내 최고가/최저가 이후 경과 기간" 측정
-    복권 Aroon → "마지막 출현까지의 경과 회차" + "최장 연속 공백" 측정
+    [원리]
+      AroonUp   = ((W − 마지막출현까지경과회차) / W) × 100
+      AroonDown = ((W − 윈도우내최장공백) / W) × 100
+      Oscillator = AroonUp − AroonDown
 
-    [수식]
-    AroonUp(n, W)   = ((W − drawsSinceLastSeen(n, W)) / W) × 100
-                       ← 높을수록 최근에 출현 → 활성 모멘텀
-
-    AroonDown(n, W) = ((W − longestConsecutiveGap(n, W)) / W) × 100
-                       ← 높을수록 최장 공백이 최근에 발생 → 냉각 패턴
-
-    Oscillator = AroonUp − AroonDown
-
-    +100 → 방금 직전 출현 + 공백 없음 → 최강 활성 신호
-    −100 → W회차 내 미출현 + 최장 공백 = W → 최강 냉각 신호
+      +100 → 아주 최근에 출현하고 공백도 짧음 (활성)
+      −100 → 오래 미출현하고 최장 공백도 김 (냉각, 회귀 가능성)
     """
     w = min(window, len(draws))
-
-    draws_since_last_seen = w  # 기본값: 윈도우 내 미출현
-    longest_gap           = 0
-    current_gap           = 0
-
+    since_last = w
+    longest = cur_gap = 0
     for i in range(w):
-        appeared = num in draws[i].numbers or (include_bonus and draws[i].bonus == num)
-        if appeared:
-            if draws_since_last_seen == w:
-                # 윈도우 내 첫(=가장 최근) 출현 위치 기록
-                draws_since_last_seen = i
-            if current_gap > longest_gap:
-                longest_gap = current_gap
-            current_gap = 0
+        if _appears(draws[i], num, include_bonus):
+            if since_last == w:
+                since_last = i
+            if cur_gap > longest:
+                longest = cur_gap
+            cur_gap = 0
         else:
-            current_gap += 1
-
-    # 윈도우 끝의 후행 공백도 반영
-    if current_gap > longest_gap:
-        longest_gap = current_gap
-
-    aroon_up   = ((w - draws_since_last_seen) / w) * 100
-    aroon_down = ((w - longest_gap)           / w) * 100
+            cur_gap += 1
+    if cur_gap > longest:
+        longest = cur_gap
+    aroon_up   = ((w - since_last) / w) * 100
+    aroon_down = ((w - longest)    / w) * 100
     return aroon_up - aroon_down
 
 
-def aroon_to_boost(oscillator: float) -> float:
+# ── §2-5. Z-Score ─────────────────────────────────────────────────────────────
+def calc_zscore_all(draws: list[DrawResult],
+                    include_bonus: bool = True) -> dict[int, float]:
     """
-    아룬 오실레이터 → 가중치 승수 변환.
+    전체 데이터 기준 Z-Score를 한 번에 계산합니다.
 
-    > +50 → ×1.06 (6% 상향, 최근 출현 + 공백 없음)
-    < −50 → ×0.94 (6% 억제, 장기 공백 패턴)
-    중립  → 오실레이터/50 × 0.03 선형 미세 조정 (최대 ±3%)
+    [원리]
+      freq(n) = 전체 회차 동안의 번호 n 누적 출현 횟수
+      μ = 45개 번호의 평균 출현 횟수
+      σ = 45개 번호의 표준편차
+      Z(n) = (freq(n) − μ) / σ
+
+      Z > +1.5 → 평균보다 유의미하게 많이 출현 (과다출현)
+      Z < −1.5 → 평균보다 유의미하게 적게 출현 (과소출현, 회귀 가능성)
     """
-    if oscillator > 50:
-        return 1.06
-    if oscillator < -50:
-        return 0.94
-    return 1.0 + (oscillator / 50.0) * 0.03
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. Z-Score 재평가 및 개선
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# ┌─────────────────────────────────────────────────────────────────────────┐
-# │ [현재 사용 방식]                                                          │
-# │ Z(n) = (freq(n) − μ_전체) / σ_전체                                        │
-# │ Z > +1.5 → 과다출현 → 가중치 −15%                                        │
-# │ Z < −1.5 → 과소출현 → 가중치 +15%                                        │
-# │                                                                         │
-# │ [금융 기술 지표와의 유사성]                                                  │
-# │  ─ Z-Score ≈ 볼린저 %B의 전체 데이터 버전                                  │
-# │  ─ 볼린저 %B : 최근 W회 기준의 횡단면 표준화 점수                             │
-# │  ─ Z-Score  : 전체 누적 기준의 횡단면 표준화 점수                             │
-# │  ─ 개념적으로 동일한 구조, 시간 범위만 다름                                   │
-# │                                                                         │
-# │ [4개 지표와의 결합 가능성]                                                  │
-# │  ✅ MA   : Z는 누적, MA는 롤링 → 상호 보완 (시간 스케일 다름)                 │
-# │  ✅ RSI  : Z는 절대 빈도 편차, RSI는 최근 윈도우 모멘텀 → 상호 보완            │
-# │  ✅ BB   : Z의 롤링 버전이 %B → 함께 사용 시 장·단기 편차 모두 포착            │
-# │  ✅ Aroon: Z는 빈도 편차, Aroon은 시간 재귀성 → 서로 다른 차원 측정            │
-# │                                                                         │
-# │ [개선 제안]                                                               │
-# │  1. 단일 임계값(±1.5) 대신 연속 함수로 부드럽게 조정                           │
-# │  2. 전체 Z-Score와 롤링 Z-Score(볼린저)를 동시에 활용                        │
-# │  3. Z-Score가 같아도 최근 트렌드(MA, RSI)가 다르면 다르게 처리                 │
-# └─────────────────────────────────────────────────────────────────────────┘
-
-def compute_z_score(draws: list[DrawResult], num: int, include_bonus: bool = True) -> float:
-    """
-    전체 데이터 기준 Z-Score를 반환합니다.
-
-    [현재 시스템과의 차이점]
-    기존: 단순 임계값(±1.5) 이진 적용
-    개선: 연속 함수로 부드럽게 처리 → z_to_boost() 에서 적용
-
-    Z(n) = (freq(n) − μ_전체) / σ_전체
-    """
-    all_freq: dict[int, int] = {n: 0 for n in range(1, 46)}
-    for draw in draws:
-        for n in draw.numbers:
-            all_freq[n] += 1
+    freq: dict[int, int] = {n: 0 for n in range(1, 46)}
+    for d in draws:
+        for n in d.numbers:
+            freq[n] += 1
         if include_bonus:
-            all_freq[draw.bonus] += 1
-
-    freq_values = list(all_freq.values())
-    mu    = statistics.mean(freq_values)
-    sigma = statistics.pstdev(freq_values) or 1.0
-
-    return (all_freq[num] - mu) / sigma
+            freq[d.bonus] += 1
+    vals  = list(freq.values())
+    mu    = statistics.mean(vals)
+    sigma = statistics.pstdev(vals) or 1.0
+    return {n: (freq[n] - mu) / sigma for n in range(1, 46)}
 
 
-def z_to_boost(z: float) -> float:
+# ════════════════════════════════════════════════════════════════════════════════
+# §3. 지표값 → 0~100 점수 변환 함수
+#
+# [변환 원칙] 평균 회귀 관점에서 "과소출현 번호에 높은 점수"를 부여합니다.
+#   모든 점수는 0~100으로 정규화됩니다.
+#   점수 50 = 완전 중립 (이론적 기대값에 정확히 위치)
+#   점수 > 50 = 상대적으로 저출현 (평균 회귀 기대 높음)
+#   점수 < 50 = 상대적으로 과출현 (평균 회귀 기대 낮음)
+# ════════════════════════════════════════════════════════════════════════════════
+
+def score_ma(signal: float) -> float:
     """
-    Z-Score → 가중치 승수 변환 (개선된 연속 함수 버전).
+    MA 크로스오버 신호 → 점수 (0~100).
 
-    기존 이진 방식(±1.5 임계값)에서 S-커브 형태의 연속 함수로 개선.
-    Z의 크기가 클수록 조정이 더 강하되, 극단값은 클리핑.
+    신호 범위 ≈ [−0.30, +0.30] (6/45 게임 특성상)
+    음수 신호(최근 빈도 감소) → 높은 점수 (회귀 가능성)
+    양수 신호(최근 빈도 증가) → 낮은 점수 (과열 가능성)
 
-    공식: boost = 1.0 − tanh(z × 0.5) × 0.15
-      z = 0   → boost = 1.00 (중립)
-      z = +2  → boost ≈ 0.87 (−13% 억제, 과다출현)
-      z = −2  → boost ≈ 1.13 (+13% 상향, 과소출현)
-      z = +4  → boost ≈ 0.85 (−15% 억제, 극단 과다출현)
-
-    tanh 사용 이유: S-커브로 부드럽게 포화 → 극단 이상치에 과잉 반응 방지.
+    score = (−signal + 0.30) / 0.60 × 100
     """
-    return max(0.5, min(2.0, 1.0 - math.tanh(z * 0.5) * 0.15))
+    raw = (-signal + 0.30) / 0.60 * 100
+    return max(0.0, min(100.0, raw))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. 통합 스코어링 엔진
-# ─────────────────────────────────────────────────────────────────────────────
-
-def compute_all_technical_scores(
-    draws: list[DrawResult],
-    ma_short_w:   int = 10,
-    ma_long_w:    int = 30,
-    rsi_window:   int = 20,
-    bb_window:    int = 30,
-    aroon_window: int = 25,
-    include_bonus: bool = True,
-) -> list[TechnicalScore]:
+def score_rsi(rsi: float) -> float:
     """
-    전체 45개 번호에 대한 기술 지표 점수를 계산합니다.
+    RSI → 점수 (0~100).
 
-    [지표 조합 논리]
-    ─ Z-Score   : 전체 누적 기준 횡단면 편차 (장기 편향 탐지)
-    ─ MA        : 단기/장기 롤링 빈도 크로스오버 (최근 추세)
-    ─ RSI       : 최근 윈도우 출현 모멘텀 (단기 과열/냉각)
-    ─ Bollinger : 최근 롤링 횡단면 편차 (단기 편향, Z의 보완)
-    ─ Aroon     : 갭 재귀성 (마지막 출현 시점 + 최장 공백)
+    RSI=0   → score=100 (극단적 과소출현, 회귀 기대 최대)
+    RSI=50  → score=50  (중립)
+    RSI=100 → score=0   (극단적 과다출현, 회귀 기대 없음)
 
-    5개가 같은 방향을 가리킬 때 가장 강한 신호.
-    서로 충돌하면 곱셈으로 인해 상쇄 → 보수적 조정.
-
-    [최종 가중치 공식]
-    composite_boost = MA_boost × RSI_boost × BB_boost × Aroon_boost × Z_boost
-                      [0.5 ~ 2.0 범위로 클리핑]
+    score = 100 − RSI
     """
-    # 볼린저밴드는 전체 번호에 대해 한 번만 계산 (효율성)
-    bb_pct_b_map = compute_bollinger_bands(draws, window=bb_window, include_bonus=include_bonus)
+    return max(0.0, min(100.0, 100.0 - rsi))
 
-    scores: list[TechnicalScore] = []
+
+def score_bb(pct_b: float) -> float:
+    """
+    볼린저 %B → 점수 (0~100).
+
+    %B=−0.5 → score=150 → 클리핑 → 100 (하단밴드 대폭 하회)
+    %B=0.0  → score=100 (하단밴드)
+    %B=0.5  → score=50  (중앙선)
+    %B=1.0  → score=0   (상단밴드)
+    %B=1.5  → score=−50 → 클리핑 → 0
+
+    score = (1 − %B) × 100
+    """
+    return max(0.0, min(100.0, (1.0 - pct_b) * 100.0))
+
+
+def score_aroon(oscillator: float) -> float:
+    """
+    Aroon 오실레이터 → 점수 (0~100).
+
+    오실레이터=−100 → score=100 (장기 미출현, 회귀 가능성)
+    오실레이터=0    → score=50  (중립)
+    오실레이터=+100 → score=0   (방금 출현, 단기 과열)
+
+    score = (−oscillator + 100) / 2
+    """
+    return max(0.0, min(100.0, (-oscillator + 100.0) / 2.0))
+
+
+def score_z(z: float) -> float:
+    """
+    Z-Score → 점수 (0~100).
+
+    Z=−3.0 → score=100 (극단적 과소출현)
+    Z= 0.0 → score=50  (평균)
+    Z=+3.0 → score=0   (극단적 과다출현)
+
+    선형 변환: score = (−Z + 3) / 6 × 100
+    (Z=±3 이상은 클리핑 처리 — 실제 6/45 데이터에서는 극히 드묾)
+    """
+    return max(0.0, min(100.0, (-z + 3.0) / 6.0 * 100.0))
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# §4. 통합 스코어링 엔진
+# ════════════════════════════════════════════════════════════════════════════════
+
+# 지표별 가중치 (합 = 1.0)
+WEIGHTS = {
+    "z":     0.30,   # Z-Score          : 가장 안정적, 전체 데이터 기반
+    "bb":    0.25,   # 볼린저밴드 %B     : Z의 단기 보완, 최근 편차 포착
+    "rsi":   0.20,   # RSI               : 최근 모멘텀, 직관적
+    "ma":    0.15,   # MA 크로스오버     : 추세 방향 보조
+    "aroon": 0.10,   # Aroon 오실레이터  : 갭 재귀성, 가장 보조적
+}
+
+def compute_scores(draws: list[DrawResult],
+                   ma_short_w:    int  = 10,
+                   ma_long_w:     int  = 30,
+                   rsi_window:    int  = 20,
+                   bb_window:     int  = 30,
+                   aroon_window:  int  = 25,
+                   include_bonus: bool = True) -> list[ScoredNumber]:
+    """
+    전체 45개 번호에 대한 통합 점수를 계산합니다.
+
+    [계산 순서]
+    Step 1. 볼린저밴드 %B와 Z-Score를 전체 번호 기준으로 일괄 계산 (효율성)
+    Step 2. 번호별로 MA, RSI, Aroon을 순차 계산
+    Step 3. 각 지표값을 0~100 점수로 정규화
+    Step 4. 가중 평균으로 종합점수 계산
+
+    종합점수 = Σ(지표점수 × 가중치)
+    """
+    # Step 1: 횡단면 일괄 계산
+    bb_map = calc_bollinger_all(draws, window=bb_window, include_bonus=include_bonus)
+    z_map  = calc_zscore_all(draws, include_bonus=include_bonus)
+
+    results: list[ScoredNumber] = []
 
     for num in range(1, 46):
-        # ── 개별 지표 계산 ──────────────────────────────────────────────
-        ma_signal        = compute_lottery_ma(draws, num, ma_short_w, ma_long_w, include_bonus)
-        rsi              = compute_lottery_rsi(draws, num, rsi_window, include_bonus)
-        bollinger_pct_b  = bb_pct_b_map[num]
-        aroon_oscillator = compute_aroon(draws, num, aroon_window, include_bonus)
-        z_score_val      = compute_z_score(draws, num, include_bonus)
+        # Step 2: 번호별 개별 계산
+        ma_val    = calc_ma(draws, num, ma_short_w, ma_long_w, include_bonus)
+        rsi_val   = calc_rsi(draws, num, rsi_window, include_bonus)
+        bb_val    = bb_map[num]
+        aroon_val = calc_aroon(draws, num, aroon_window, include_bonus)
+        z_val     = z_map[num]
 
-        # ── 각 지표 → 가중치 승수 변환 ──────────────────────────────────
-        ma_boost    = ma_to_boost(ma_signal)
-        rsi_boost   = rsi_to_boost(rsi)
-        bb_boost    = bb_to_boost(bollinger_pct_b)
-        aroon_boost = aroon_to_boost(aroon_oscillator)
-        z_boost     = z_to_boost(z_score_val)
-
-        # ── 복합 가중치 (곱셈 조합) ─────────────────────────────────────
-        composite = ma_boost * rsi_boost * bb_boost * aroon_boost * z_boost
-        composite = max(0.5, min(2.0, composite))  # 안전 클리핑
-
-        scores.append(TechnicalScore(
-            number           = num,
-            ma_signal        = round(ma_signal, 4),
-            rsi              = round(rsi, 2),
-            bollinger_pct_b  = round(bollinger_pct_b, 4),
-            aroon_oscillator = round(aroon_oscillator, 2),
-            z_score          = round(z_score_val, 4),
-            ma_boost         = round(ma_boost, 4),
-            rsi_boost        = round(rsi_boost, 4),
-            bb_boost         = round(bb_boost, 4),
-            aroon_boost      = round(aroon_boost, 4),
-            z_boost          = round(z_boost, 4),
-            composite_boost  = round(composite, 4),
-        ))
-
-    return scores
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. 번호 순위 및 추천
-# ─────────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class NumberRanking:
-    """번호별 최종 순위 정보."""
-    rank: int
-    number: int
-    composite_boost: float
-    signal_summary: str    # 5개 지표의 방향성 요약
-    rsi: float
-    z_score: float
-    aroon_oscillator: float
-    bollinger_pct_b: float
-    ma_signal: float
-
-
-def _signal_direction(score: TechnicalScore) -> str:
-    """5개 지표의 방향성을 간략하게 요약합니다."""
-    parts: list[str] = []
-
-    # MA
-    if score.ma_signal > 0.02:
-        parts.append("MA↑")
-    elif score.ma_signal < -0.02:
-        parts.append("MA↓")
-    else:
-        parts.append("MA─")
-
-    # RSI
-    if score.rsi > 70:
-        parts.append("RSI과열")
-    elif score.rsi < 30:
-        parts.append("RSI냉각")
-    else:
-        parts.append("RSI중립")
-
-    # Bollinger
-    if score.bollinger_pct_b > 1.0:
-        parts.append("BB상단↑")
-    elif score.bollinger_pct_b < 0.0:
-        parts.append("BB하단↓")
-    else:
-        parts.append("BB인밴드")
-
-    # Aroon
-    if score.aroon_oscillator > 50:
-        parts.append("Aroon활성")
-    elif score.aroon_oscillator < -50:
-        parts.append("Aroon냉각")
-    else:
-        parts.append("Aroon중립")
-
-    # Z-Score
-    if score.z_score > 1.5:
-        parts.append("Z과다")
-    elif score.z_score < -1.5:
-        parts.append("Z과소")
-    else:
-        parts.append("Z정상")
-
-    return " | ".join(parts)
-
-
-def rank_numbers(
-    scores: list[TechnicalScore],
-    top_n: int = 45,
-) -> list[NumberRanking]:
-    """
-    복합 가중치(composite_boost) 기준으로 번호를 순위화합니다.
-
-    높은 composite_boost = 여러 지표가 동시에 긍정적 신호를 발신.
-    낮은 composite_boost = 여러 지표가 동시에 억제 신호를 발신.
-
-    [중요 주의사항]
-    순위가 높다고 당첨 확률이 높아지는 것이 아닙니다.
-    복권은 독립 사건이므로 이 순위는 통계적 경향에 대한 '참고 정보'입니다.
-    """
-    sorted_scores = sorted(scores, key=lambda s: s.composite_boost, reverse=True)
-
-    rankings: list[NumberRanking] = []
-    for rank, score in enumerate(sorted_scores[:top_n], start=1):
-        rankings.append(NumberRanking(
-            rank             = rank,
-            number           = score.number,
-            composite_boost  = score.composite_boost,
-            signal_summary   = _signal_direction(score),
-            rsi              = score.rsi,
-            z_score          = score.z_score,
-            aroon_oscillator = score.aroon_oscillator,
-            bollinger_pct_b  = score.bollinger_pct_b,
-            ma_signal        = score.ma_signal,
-        ))
-    return rankings
-
-
-def recommend_numbers(
-    scores: list[TechnicalScore],
-    count: int = 6,
-    use_weighted_sampling: bool = True,
-    seed: int | None = None,
-) -> tuple[list[int], list[NumberRanking]]:
-    """
-    기술 지표 가중치를 적용한 번호 추천 (확률적 선택).
-
-    [선택 방식]
-    use_weighted_sampling = True  → 가중치에 비례한 확률로 무작위 선택
-                                    (가중치가 높아도 선택이 보장되지 않음 → 진정한 확률)
-    use_weighted_sampling = False → 상위 N개 번호를 결정론적으로 선택
-                                    (이 방식은 과적합 위험이 있어 비권장)
-
-    [확률적 가중치 샘플링 수식]
-    P(n 선택) = composite_boost(n) / Σ composite_boost(모든 번호)
-    """
-    rng = random.Random(seed)
-
-    numbers  = [s.number          for s in scores]
-    weights  = [s.composite_boost for s in scores]
-
-    if use_weighted_sampling:
-        selected_nums = rng.choices(numbers, weights=weights, k=count * 10)
-        # 중복 제거하면서 순서 유지
-        seen: set[int] = set()
-        unique: list[int] = []
-        for n in selected_nums:
-            if n not in seen and len(unique) < count:
-                seen.add(n)
-                unique.append(n)
-        # 충분하지 않으면 나머지를 무작위로 채움
-        remaining = [n for n in numbers if n not in seen]
-        rng.shuffle(remaining)
-        unique.extend(remaining[:count - len(unique)])
-        selected_nums = sorted(unique)
-    else:
-        # 결정론적 상위 N개 선택
-        top_scores = sorted(scores, key=lambda s: s.composite_boost, reverse=True)
-        selected_nums = sorted(s.number for s in top_scores[:count])
-
-    # 선택된 번호의 순위 정보 반환
-    score_map = {s.number: s for s in scores}
-    all_rankings = rank_numbers(scores)
-    rank_map = {r.number: r for r in all_rankings}
-    selected_rankings = [rank_map[n] for n in selected_nums if n in rank_map]
-
-    return selected_nums, selected_rankings
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 9. 출력 및 메인 실행
-# ─────────────────────────────────────────────────────────────────────────────
-
-def print_indicator_report(scores: list[TechnicalScore], top_n: int = 15) -> None:
-    """상위 N개 번호의 기술 지표 상세 리포트를 출력합니다."""
-
-    rankings = rank_numbers(scores, top_n=top_n)
-
-    header = (
-        f"{'순위':>4} {'번호':>4} {'복합가중':>8} "
-        f"{'MA신호':>8} {'RSI':>7} {'BB(%B)':>8} "
-        f"{'Aroon':>7} {'Z-Score':>8}"
-    )
-    separator = "─" * len(header)
-
-    print("\n" + "═" * len(header))
-    print("  기술 지표 통합 번호 순위 리포트 (복합 가중치 기준)")
-    print("═" * len(header))
-    print(header)
-    print(separator)
-
-    for r in rankings:
-        print(
-            f"{r.rank:>4} "
-            f"{r.number:>4} "
-            f"{r.composite_boost:>8.4f} "
-            f"{r.ma_signal:>+8.4f} "
-            f"{r.rsi:>7.2f} "
-            f"{r.bollinger_pct_b:>8.4f} "
-            f"{r.aroon_oscillator:>+7.2f} "
-            f"{r.z_score:>+8.4f}"
+        raw = IndicatorValues(
+            number=num,
+            ma_signal=round(ma_val, 4),
+            rsi=round(rsi_val, 2),
+            bollinger_pct_b=round(bb_val, 4),
+            aroon_oscillator=round(aroon_val, 2),
+            z_score=round(z_val, 4),
         )
 
-    print(separator)
-    print("\n  [지표 판독 기준]")
-    print("  복합가중 > 1.0 → 여러 지표가 긍정 신호   | 복합가중 < 1.0 → 억제 신호")
-    print("  RSI > 70 → 과다출현(과매수)              | RSI < 30 → 과소출현(과매도)")
-    print("  BB(%B) > 1.0 → 상단 밴드 초과           | BB(%B) < 0 → 하단 밴드 미달")
-    print("  Aroon > +50 → 최근 활성                  | Aroon < -50 → 장기 공백 패턴")
-    print("  Z > +1.5 → 누적 과다출현                 | Z < -1.5 → 누적 과소출현")
+        # Step 3: 정규화 점수
+        s_ma    = score_ma(ma_val)
+        s_rsi   = score_rsi(rsi_val)
+        s_bb    = score_bb(bb_val)
+        s_aroon = score_aroon(aroon_val)
+        s_z     = score_z(z_val)
+
+        # Step 4: 가중 평균 종합점수
+        composite = (
+            WEIGHTS["z"]     * s_z    +
+            WEIGHTS["bb"]    * s_bb   +
+            WEIGHTS["rsi"]   * s_rsi  +
+            WEIGHTS["ma"]    * s_ma   +
+            WEIGHTS["aroon"] * s_aroon
+        )
+
+        results.append(ScoredNumber(
+            number=num, raw=raw,
+            score_ma=round(s_ma, 2),
+            score_rsi=round(s_rsi, 2),
+            score_bb=round(s_bb, 2),
+            score_aroon=round(s_aroon, 2),
+            score_z=round(s_z, 2),
+            composite=round(composite, 2),
+        ))
+
+    return results
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# §5. 출력 포맷터
+# ════════════════════════════════════════════════════════════════════════════════
+
+W = 96  # 출력 전체 너비
+
+def _bar(score: float, width: int = 10) -> str:
+    """점수(0~100)를 미니 막대그래프로 표현."""
+    filled = round(score / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _level(score: float) -> str:
+    """종합점수 구간 레이블."""
+    if score >= 75: return "◉ 강한 회귀 신호"
+    if score >= 60: return "● 중간 회귀 신호"
+    if score >= 50: return "○ 약한 회귀 신호"
+    if score >= 40: return "▽ 약한 억제 신호"
+    return               "▼ 강한 억제 신호"
+
+
+def print_step_by_step_logic() -> None:
+    """단계별 분석 로직 설명."""
+    print("\n" + "=" * W)
+    print("  [단계별 분석 로직 설명]".center(W))
+    print("=" * W)
+
+    steps = [
+        ("STEP 1", "데이터 준비",
+         "과거 회차 당첨 번호를 로드합니다. 각 번호(1~45)를 독립적인 시계열로 취급합니다.\n"
+         "         각 회차는 해당 번호의 출현(1) 또는 미출현(0)으로 이진 변환됩니다."),
+
+        ("STEP 2", "지표 원시값 계산 (5종)",
+         "① MA   : 단기(10회) vs 장기(30회) 이진 평균 비교 → 빈도 추세 방향\n"
+         "         ② RSI  : 최근 20회 출현/미출현 비율 → 0~100 모멘텀 지수\n"
+         "         ③ BB   : 전체 45번호 롤링빈도(30회)의 횡단면 분포 → %B 위치\n"
+         "         ④ Aroon: 마지막 출현까지 경과 회차 + 최장 공백 → 오실레이터\n"
+         "         ⑤ Z    : 전체 누적 빈도의 횡단면 표준편차 위치"),
+
+        ("STEP 3", "0~100 점수 정규화 (평균 회귀 방향)",
+         "모든 지표를 동일 척도로 변환합니다. 과소출현 = 높은 점수 원칙:\n"
+         "         MA점수  = (−신호 + 0.30) / 0.60 × 100  → 음수 신호일수록 고점수\n"
+         "         RSI점수 = 100 − RSI                    → 과매도일수록 고점수\n"
+         "         BB점수  = (1 − %B) × 100               → 하단밴드일수록 고점수\n"
+         "         Aroon점수 = (−오실레이터 + 100) / 2     → 장기 미출현일수록 고점수\n"
+         "         Z점수   = (−Z + 3) / 6 × 100           → 음의 Z일수록 고점수"),
+
+        ("STEP 4", "가중 평균 종합점수 산출",
+         "종합점수 = 0.30×Z점수 + 0.25×BB점수 + 0.20×RSI점수\n"
+         "                      + 0.15×MA점수 + 0.10×Aroon점수\n"
+         "         가중치 배분 근거: Z-Score(전체 데이터 안정성) > BB(단기 민감도)\n"
+         "         > RSI(직관성) > MA(보조 추세) > Aroon(가장 약한 갭 신호)"),
+
+        ("STEP 5", "순위화 및 추천",
+         "45개 번호를 종합점수 기준으로 내림차순 정렬합니다.\n"
+         "         상위 6개 번호를 추천하되, 이는 확률 예측이 아닌 통계 패턴 해석입니다."),
+    ]
+
+    for code, title, desc in steps:
+        print(f"\n  [{code}] {title}")
+        print(f"         {desc}")
     print()
 
 
-def print_recommendation(
-    selected_nums: list[int],
-    selected_rankings: list[NumberRanking],
+def print_full_table(scored: list[ScoredNumber]) -> None:
+    """
+    전체 45개 번호 분석 테이블 출력.
+
+    컬럼: 번호 / MA / RSI / BB(%B) / Aroon / Z-Score /
+           MA점수 / RSI점수 / BB점수 / Aroon점수 / Z점수 / 종합점수 / 신호
+    """
+    sorted_all = sorted(scored, key=lambda s: s.composite, reverse=True)
+
+    print("\n" + "=" * W)
+    print("  [전체 번호 분석 테이블] (종합점수 기준 내림차순)".center(W))
+    print("=" * W)
+
+    # 헤더 (원시값 파트)
+    hdr1 = (f"{'순위':>4} {'번호':>4}  "
+            f"{'── 원시 지표값 ──────────────────────────────':^46}  "
+            f"{'── 정규화 점수(0~100) ───────────────────────────────────':^58}  "
+            f"{'종합':>6}")
+    print(hdr1)
+
+    hdr2 = (f"{'':>4} {'':>4}  "
+            f"{'MA신호':>8} {'RSI':>7} {'BB(%B)':>8} {'Aroon':>7} {'Z-Score':>8}  "
+            f"{'MA점수':>7} {'RSI점수':>7} {'BB점수':>7} {'Aroon점수':>9} {'Z점수':>7}  "
+            f"{'점수':>6}  {'신호':}")
+    print(hdr2)
+    print("-" * W)
+
+    for rank, s in enumerate(sorted_all, 1):
+        r = s.raw
+        marker = "▶" if rank <= 6 else " "
+        print(
+            f"{marker}{rank:>3} {s.number:>4}번  "
+            f"{r.ma_signal:>+8.4f} {r.rsi:>7.2f} {r.bollinger_pct_b:>8.4f} "
+            f"{r.aroon_oscillator:>+7.2f} {r.z_score:>+8.4f}  "
+            f"{s.score_ma:>7.2f} {s.score_rsi:>7.2f} {s.score_bb:>7.2f} "
+            f"{s.score_aroon:>9.2f} {s.score_z:>7.2f}  "
+            f"{s.composite:>6.2f}  {_level(s.composite)}"
+        )
+        if rank == 6:
+            print("  " + "· " * 47)  # 추천 번호와 나머지 구분선
+
+    print("-" * W)
+    print("  ▶ = 상위 6개 추천 번호")
+    print()
+
+
+def print_indicator_legend() -> None:
+    """지표 판독 기준 범례."""
+    print("─" * W)
+    print("  [지표 판독 기준]".center(W))
+    print("─" * W)
+    rows = [
+        ("MA 신호",    "> 0", "최근 출현 빈도 증가 (상승 추세)",  "< 0", "최근 출현 빈도 감소 ★ 회귀 기대"),
+        ("RSI",        "> 70","과다출현 (과매수 구간)",           "< 30","과소출현 (과매도) ★ 회귀 기대"),
+        ("BB (%B)",    "> 1", "상단밴드 초과 (횡단면 과열)",      "< 0", "하단밴드 미달 ★ 회귀 기대"),
+        ("Aroon",      "> +50","최근 활성 출현",                 "< −50","장기 공백 ★ 회귀 기대"),
+        ("Z-Score",    "> +1.5","누적 과다출현",                 "< −1.5","누적 과소출현 ★ 회귀 기대"),
+        ("종합점수",   "≥ 75", "강한 복수 회귀 신호",            "< 40", "강한 복수 억제 신호"),
+    ]
+    print(f"  {'지표':^10}  {'과열 기준':^16} {'의미':^28}  {'냉각 기준':^16} {'의미':^28}")
+    print("  " + "-" * (W - 2))
+    for ind, h_crit, h_mean, c_crit, c_mean in rows:
+        print(f"  {ind:<10}  {h_crit:^16} {h_mean:<28}  {c_crit:^16} {c_mean:<28}")
+    print()
+
+
+def _interpret_indicator(label: str, raw_val: float,
+                          score: float, detail: str) -> str:
+    """개별 지표 해석 한 줄 문자열."""
+    direction = "▲" if score >= 60 else ("▼" if score <= 40 else "─")
+    return f"    {direction} {label:<16}: {detail} (점수 {score:.1f}/100)"
+
+
+def print_top6_interpretation(scored: list[ScoredNumber],
+                               draws: list[DrawResult]) -> None:
+    """상위 6개 추천 번호에 대한 상세 해석."""
+    top6 = sorted(scored, key=lambda s: s.composite, reverse=True)[:6]
+    recommended = [s.number for s in top6]
+
+    print("=" * W)
+    print("  [🎯 상위 추천 번호 6개 — 상세 해석]".center(W))
+    print("=" * W)
+    print()
+    print(f"  추천 번호: {' — '.join(f'{n:02d}' for n in recommended)}")
+    print()
+
+    # 전체 총 회차 수 (참고용)
+    total = len(draws)
+
+    for rank, s in enumerate(top6, 1):
+        r  = s.raw
+        n  = s.number
+
+        # 전체 누적 출현 횟수 계산 (해석용)
+        total_count = sum(1 for d in draws if n in d.numbers or d.bonus == n)
+        expected    = round(total * (6 / 45), 1)   # 이론적 기대 출현 횟수 (보너스 제외 기준 보정 없이 단순 참조)
+
+        print("─" * W)
+        print(f"  [{rank}위] 번호 {n:02d}번  ·  종합점수 {s.composite:.2f} / 100  ({_level(s.composite)})")
+        print(f"       누적 출현 횟수: {total_count}회  /  이론 기댓값: ≈{expected:.0f}회  "
+              f"({'부족' if total_count < expected else '초과' if total_count > expected else '일치'})")
+        print()
+
+        # 지표별 상세 해석
+        # ① MA
+        if r.ma_signal < -0.02:
+            ma_detail = f"단기 빈도({r.ma_signal:+.4f}) < 장기 빈도 → 최근 출현 둔화"
+        elif r.ma_signal > 0.02:
+            ma_detail = f"단기 빈도({r.ma_signal:+.4f}) > 장기 빈도 → 최근 출현 가속"
+        else:
+            ma_detail = f"단기/장기 빈도 유사({r.ma_signal:+.4f}) → 중립"
+        print(_interpret_indicator("MA 크로스오버", r.ma_signal, s.score_ma, ma_detail))
+
+        # ② RSI
+        if r.rsi < 30:
+            rsi_detail = f"RSI {r.rsi:.1f} → 과소출현 구간 (과매도) — 평균 회귀 기대↑"
+        elif r.rsi > 70:
+            rsi_detail = f"RSI {r.rsi:.1f} → 과다출현 구간 (과매수) — 평균 회귀 기대↓"
+        else:
+            rsi_detail = f"RSI {r.rsi:.1f} → 중립 구간 (30~70)"
+        print(_interpret_indicator("RSI", r.rsi, s.score_rsi, rsi_detail))
+
+        # ③ Bollinger
+        if r.bollinger_pct_b < 0:
+            bb_detail = f"%B {r.bollinger_pct_b:.4f} → 하단밴드 하회 (최근 과소출현 극단)"
+        elif r.bollinger_pct_b > 1:
+            bb_detail = f"%B {r.bollinger_pct_b:.4f} → 상단밴드 초과 (최근 과다출현 극단)"
+        elif r.bollinger_pct_b < 0.5:
+            bb_detail = f"%B {r.bollinger_pct_b:.4f} → 중앙선 하방 (하단밴드 방향)"
+        else:
+            bb_detail = f"%B {r.bollinger_pct_b:.4f} → 중앙선 상방 (상단밴드 방향)"
+        print(_interpret_indicator("볼린저밴드 %B", r.bollinger_pct_b, s.score_bb, bb_detail))
+
+        # ④ Aroon
+        if r.aroon_oscillator < -50:
+            aroon_detail = f"오실레이터 {r.aroon_oscillator:+.1f} → 장기 공백 패턴 (냉각, 회귀 기대)"
+        elif r.aroon_oscillator > 50:
+            aroon_detail = f"오실레이터 {r.aroon_oscillator:+.1f} → 최근 활성 출현 (모멘텀)"
+        else:
+            aroon_detail = f"오실레이터 {r.aroon_oscillator:+.1f} → 혼재 신호 (중립)"
+        print(_interpret_indicator("Aroon 오실레이터", r.aroon_oscillator, s.score_aroon, aroon_detail))
+
+        # ⑤ Z-Score
+        if r.z_score < -1.5:
+            z_detail = f"Z = {r.z_score:+.4f} → 통계적 유의 과소출현 (1.5σ 하회)"
+        elif r.z_score > 1.5:
+            z_detail = f"Z = {r.z_score:+.4f} → 통계적 유의 과다출현 (1.5σ 초과)"
+        else:
+            z_detail = f"Z = {r.z_score:+.4f} → 정상 범위 이내 (±1.5σ)"
+        print(_interpret_indicator("Z-Score", r.z_score, s.score_z, z_detail))
+
+        # 종합 해석
+        print()
+        high_scores = sorted(
+            [("Z", s.score_z), ("BB", s.score_bb), ("RSI", s.score_rsi),
+             ("MA", s.score_ma), ("Aroon", s.score_aroon)],
+            key=lambda x: x[1], reverse=True
+        )
+        top_signals = [f"{name}({sc:.0f}점)" for name, sc in high_scores[:3] if sc > 55]
+        if top_signals:
+            print(f"       → 핵심 신호: {', '.join(top_signals)} 지표가 동시에 과소출현 방향을 가리킵니다.")
+        else:
+            print(f"       → 특이 신호 없음: 복합적인 중립 신호 상태입니다.")
+        print()
+
+    print("─" * W)
+
+
+def print_score_distribution(scored: list[ScoredNumber]) -> None:
+    """전체 45번호의 종합점수 분포 요약."""
+    scores = [s.composite for s in scored]
+    mu  = statistics.mean(scores)
+    sd  = statistics.stdev(scores)
+    mn  = min(scores)
+    mx  = max(scores)
+
+    print("─" * W)
+    print("  [종합점수 분포 요약]".center(W))
+    print("─" * W)
+    print(f"  평균: {mu:.2f}  |  표준편차: {sd:.2f}  |  최솟값: {mn:.2f}  |  최댓값: {mx:.2f}")
+
+    bands = [
+        ("75~100", "◉ 강한 회귀 신호"),
+        ("60~75",  "● 중간 회귀 신호"),
+        ("50~60",  "○ 약한 회귀 신호"),
+        ("40~50",  "▽ 약한 억제 신호"),
+        ("0~40",   "▼ 강한 억제 신호"),
+    ]
+    thresholds = [(75, 100), (60, 75), (50, 60), (40, 50), (0, 40)]
+    print()
+    for (lo, hi), (range_label, desc) in zip(thresholds, bands):
+        nums = [s.number for s in scored if lo <= s.composite <= hi]
+        bar  = "█" * len(nums) + "░" * (45 - len(nums))
+        print(f"  {range_label:>8}점  {desc:<18}  {bar}  {len(nums):>2}개번호: {nums}")
+    print()
+
+
+def print_disclaimer() -> None:
+    """필수 면책 고지."""
+    print("=" * W)
+    print("  ⚠️  [중요 공지 — 반드시 확인하십시오]".center(W))
+    print("=" * W)
+    print("""
+  본 분석 결과는 "통계적 패턴 해석"이며, 실제 로또 당첨 확률과 무관합니다.
+
+  [과학적 사실]
+  · 로또 6/45의 매 회차 추첨은 완전한 독립 사건입니다.
+  · 각 번호의 이론적 선택 확률은 정확히 6/45 = 13.333...%입니다.
+  · 이 확률은 과거 당첨 이력과 상관없이 매 회차 동일하게 유지됩니다.
+  · "도박사의 오류(Gambler's Fallacy)": 오래 안 나온 번호가 곧 나온다는
+    믿음은 통계적으로 근거가 없습니다.
+
+  [본 시스템의 한계]
+  · 모든 지표는 과거 데이터 기반이며, 미래를 예측하는 도구가 아닙니다.
+  · 평균 회귀는 장기(수천 회차)에 걸쳐 관찰되는 현상이며,
+    단기 예측력은 없습니다.
+  · 종합점수는 상대적 통계 경향성 지표이지 확률 수치가 아닙니다.
+
+  [권장 사항]
+  · 복권은 오락 목적으로만 구매하십시오.
+  · 본 분석 결과를 투자 또는 배팅 근거로 사용하지 마십시오.
+  · 책임감 있는 복권 구매를 권장합니다.
+    """)
+    print("=" * W)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# §6. 메인 실행 엔트리포인트
+# ════════════════════════════════════════════════════════════════════════════════
+
+def main(
+    n_rounds:      int  = 300,    # 분석할 회차 수
+    ma_short_w:    int  = 10,     # MA 단기 윈도우
+    ma_long_w:     int  = 30,     # MA 장기 윈도우
+    rsi_window:    int  = 20,     # RSI 계산 윈도우
+    bb_window:     int  = 30,     # 볼린저밴드 롤링 윈도우
+    aroon_window:  int  = 25,     # Aroon 계산 윈도우
+    include_bonus: bool = True,   # 보너스 번호 포함 여부
+    seed:          int  = 42,     # 샘플 데이터 재현 시드
 ) -> None:
-    """번호 추천 결과를 출력합니다."""
-    print("═" * 60)
-    print("  🎯 기술 지표 기반 번호 추천 (확률적 가중 샘플링)")
-    print("═" * 60)
-    print(f"\n  추천 번호: {' ─ '.join(f'{n:02d}' for n in selected_nums)}\n")
 
-    for r in selected_rankings:
-        print(f"  [{r.number:02d}] 전체순위 {r.rank:>2}위 | 복합가중 {r.composite_boost:.4f}")
-        print(f"       {r.signal_summary}")
+    print("\n" + "=" * W)
+    print("  한국 로또 6/45 — 기술 지표 기반 통계 패턴 분석 시스템".center(W))
+    print("  MA  ·  RSI  ·  볼린저밴드  ·  Aroon  ·  Z-Score  통합 분석".center(W))
+    print("=" * W)
+    print(f"\n  분석 파라미터: {n_rounds}회차  |  MA {ma_short_w}/{ma_long_w}  |  "
+          f"RSI {rsi_window}  |  BB {bb_window}  |  Aroon {aroon_window}  |  "
+          f"보너스 {'포함' if include_bonus else '제외'}")
 
+    # ── 단계별 로직 설명 ──────────────────────────────────────────────────────
+    print_step_by_step_logic()
+
+    # ── 데이터 로드 ───────────────────────────────────────────────────────────
+    print(f"  데이터 로딩 중... ", end="", flush=True)
+    draws = make_sample_draws(n_rounds=n_rounds, seed=seed)
+    print(f"{len(draws)}회차 완료.")
+
+    # ── 통합 점수 계산 ────────────────────────────────────────────────────────
+    print(f"  지표 계산 중 (5종 × 45번호)... ", end="", flush=True)
+    scored = compute_scores(
+        draws,
+        ma_short_w=ma_short_w, ma_long_w=ma_long_w,
+        rsi_window=rsi_window, bb_window=bb_window,
+        aroon_window=aroon_window, include_bonus=include_bonus,
+    )
+    print("완료.\n")
+
+    # ── 전체 번호 분석 테이블 ─────────────────────────────────────────────────
+    print_full_table(scored)
+    print_indicator_legend()
+    print_score_distribution(scored)
+
+    # ── 상위 6개 상세 해석 ───────────────────────────────────────────────────
+    print_top6_interpretation(scored, draws)
+
+    # ── 가중치 요약 ───────────────────────────────────────────────────────────
+    print("─" * W)
+    print("  [가중치 설정 근거]".center(W))
+    print("─" * W)
+    weight_info = [
+        ("Z-Score",        f"{WEIGHTS['z']*100:.0f}%",
+         "전체 누적 데이터 기반 → 가장 안정적·신뢰도 높은 장기 편차 지표"),
+        ("볼린저밴드 %B",  f"{WEIGHTS['bb']*100:.0f}%",
+         "롤링 횡단면 편차 → Z-Score 보완, 최근 N회 변화에 민감"),
+        ("RSI",            f"{WEIGHTS['rsi']*100:.0f}%",
+         "최근 출현 모멘텀 → 단기 과열/냉각 포착, 직관적 해석 가능"),
+        ("MA 크로스오버",  f"{WEIGHTS['ma']*100:.0f}%",
+         "단/장기 빈도 추세 방향 → RSI와 상호 보완적 역할"),
+        ("Aroon",          f"{WEIGHTS['aroon']*100:.0f}%",
+         "갭 재귀성(시간 차원) → 독립 정보지만 도박사 오류에 취약, 최소 가중"),
+    ]
+    for name, wt, reason in weight_info:
+        print(f"  {name:<16} {wt:>4}  —  {reason}")
     print()
-    print("  ⚠️  주의: 복권은 독립 사건입니다. 본 분석은 통계적 참고 정보이며")
-    print("            당첨을 보장하지 않습니다. 책임감 있는 구매를 권장합니다.")
-    print("═" * 60)
 
+    # ── 면책 고지 ─────────────────────────────────────────────────────────────
+    print_disclaimer()
 
-def print_z_score_analysis(scores: list[TechnicalScore]) -> None:
-    """Z-Score 심층 분석 리포트를 출력합니다."""
-    print("\n" + "═" * 60)
-    print("  📊 Z-Score 심층 분석 (vs 기술 지표 비교)")
-    print("═" * 60)
-
-    over  = [(s.number, s.z_score) for s in scores if s.z_score >  1.5]
-    under = [(s.number, s.z_score) for s in scores if s.z_score < -1.5]
-    normal= [(s.number, s.z_score) for s in scores if -1.5 <= s.z_score <= 1.5]
-
-    print(f"\n  과다출현 (Z > +1.5): {len(over)}개")
-    for num, z in sorted(over, key=lambda x: -x[1]):
-        s = next(sc for sc in scores if sc.number == num)
-        print(f"    번호 {num:02d}  Z={z:+.3f}  RSI={s.rsi:.1f}  MA={s.ma_signal:+.4f}  Aroon={s.aroon_oscillator:+.1f}")
-
-    print(f"\n  과소출현 (Z < -1.5): {len(under)}개")
-    for num, z in sorted(under, key=lambda x: x[1]):
-        s = next(sc for sc in scores if sc.number == num)
-        print(f"    번호 {num:02d}  Z={z:+.3f}  RSI={s.rsi:.1f}  MA={s.ma_signal:+.4f}  Aroon={s.aroon_oscillator:+.1f}")
-
-    print(f"\n  정상 범위 (-1.5 ≤ Z ≤ +1.5): {len(normal)}개")
-
-    print("\n  [Z-Score ↔ 기술 지표 상관 관계 요약]")
-    print("  ─ Z-Score vs Bollinger %B : 동일 구조, 시간 범위만 다름 (전체 vs 롤링)")
-    print("  ─ Z-Score vs RSI          : Z는 누적 편차, RSI는 최근 모멘텀 → 상호 보완")
-    print("  ─ Z-Score vs MA           : Z는 정적, MA는 동적 → 함께 사용 시 장단기 포착")
-    print("  ─ Z-Score vs Aroon        : Z는 빈도 차원, Aroon은 시간 차원 → 독립 정보")
-    print()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 메인 실행
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("\n" + "=" * 60)
-    print("  한국 로또 6/45 기술 지표 분석 시스템")
-    print("  (MA · RSI · 볼린저밴드 · Aroon · Z-Score 통합)")
-    print("=" * 60)
-
-    # ── 데이터 로드 (실제 환경에서는 API/CSV로 대체) ──────────────
-    print("\n  [1/4] 회차 데이터 생성 중...")
-    draws = make_sample_draws(n_rounds=300, seed=2025)
-    print(f"        총 {len(draws)}회차 데이터 로드 완료.")
-
-    # ── 전체 기술 지표 계산 ────────────────────────────────────────
-    print("  [2/4] 기술 지표 계산 중 (5종 × 45번호)...")
-    scores = compute_all_technical_scores(
-        draws,
-        ma_short_w   = 10,    # MA 단기 윈도우
-        ma_long_w    = 30,    # MA 장기 윈도우
-        rsi_window   = 20,    # RSI 계산 윈도우
-        bb_window    = 30,    # 볼린저밴드 윈도우
-        aroon_window = 25,    # 아룬 윈도우
-        include_bonus = True, # 보너스 번호 포함 여부
+    main(
+        n_rounds      = 300,
+        ma_short_w    = 10,
+        ma_long_w     = 30,
+        rsi_window    = 20,
+        bb_window     = 30,
+        aroon_window  = 25,
+        include_bonus = True,
+        seed          = 42,
     )
-    print("        완료.")
-
-    # ── 순위 리포트 출력 ───────────────────────────────────────────
-    print("  [3/4] 순위 리포트 생성 중...")
-    print_indicator_report(scores, top_n=15)
-
-    # ── Z-Score 심층 분석 ──────────────────────────────────────────
-    print_z_score_analysis(scores)
-
-    # ── 번호 추천 ──────────────────────────────────────────────────
-    print("  [4/4] 번호 추천 중...")
-    selected, sel_rankings = recommend_numbers(
-        scores,
-        count                = 6,
-        use_weighted_sampling = True,  # 확률적 가중 샘플링 (권장)
-        seed                 = None,   # None = 매번 다른 결과
-    )
-    print_recommendation(selected, sel_rankings)
