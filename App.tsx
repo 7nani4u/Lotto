@@ -67,6 +67,8 @@ const App: React.FC = () => {
   const generatedHistoryRef = useRef<Set<string>>(new Set());
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [freqPage, setFreqPage] = useState(0);
+  const [filterNumbers, setFilterNumbers] = useState<number[]>([]);
 
   useEffect(() => {
     try {
@@ -124,8 +126,7 @@ const App: React.FC = () => {
 
     const sorted = Object.entries(stats.frequencies as Record<string, number>)
       .map(([num, count]) => ({ num: Number(num), count: count as number }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 15);
+      .sort((a, b) => b.count - a.count);
 
     const maxCount = sorted[0]?.count ?? 1;
 
@@ -439,6 +440,40 @@ const App: React.FC = () => {
             )}
           </div>
 
+          {/* ── 선택 번호 필터 ── */}
+          <div className="w-full md:w-2/3 mb-6 bg-gray-900/60 border border-purple-900/40 rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-bold text-purple-300">선택 번호 필터</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">
+                  {filterNumbers.length > 0 ? `${filterNumbers.sort((a,b)=>a-b).join(', ')} 선택됨` : '선택 없음 (전체 표시)'}
+                </span>
+                {filterNumbers.length > 0 && (
+                  <button
+                    onClick={() => setFilterNumbers([])}
+                    className="text-[10px] px-2 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-gray-600 transition-colors"
+                  >초기화</button>
+                )}
+              </div>
+            </div>
+            <p className="text-[11px] text-gray-500 mb-3">번호를 클릭하면 해당 번호가 포함된 조합만 표시됩니다 (OR 조건)</p>
+            <div className="grid grid-cols-9 gap-1">
+              {Array.from({ length: 45 }, (_, i) => i + 1).map(n => {
+                const selected = filterNumbers.includes(n);
+                const ballCls = n <= 10 ? 'bg-yellow-700' : n <= 20 ? 'bg-blue-700' : n <= 30 ? 'bg-red-700' : n <= 40 ? 'bg-gray-600' : 'bg-green-700';
+                return (
+                  <button
+                    key={n}
+                    onClick={() => setFilterNumbers(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])}
+                    className={`w-full aspect-square rounded-md text-[11px] font-bold transition-all ${selected ? `${ballCls} text-white ring-2 ring-white scale-105` : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                  >
+                    {n}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <button
             onClick={() => { void handleGenerateQuantum(); }}
             disabled={isAnalyzing || isOptimizingQuantum || isGeneratingQuantum}
@@ -460,38 +495,57 @@ const App: React.FC = () => {
           )}
 
           {quantumPredictions.length > 0 && (
-            <div className="w-full grid grid-cols-1 xl:grid-cols-2 gap-4 animate-fade-in">
-              {quantumPredictions.map((prediction, index) => (
-                <div key={prediction.numbers.join('-')} className="bg-gray-900/80 rounded-2xl p-6 border border-purple-900/50 shadow-inner">
-                  <div className="text-left text-sm text-purple-300 font-bold mb-4">양자 조합 #{index + 1}</div>
-                  <div className="flex flex-nowrap justify-center gap-2 sm:gap-3 md:gap-4 mb-6">
-                    {prediction.numbers.map((num, i) => (
-                      <Ball key={i} num={num} onClick={() => handleBallClick(num)} />
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 text-sm text-gray-300 border-t border-gray-700/50 pt-6">
-                    <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
-                      <div className="text-gray-400 mb-2 font-medium">총합</div>
-                      <div className="text-2xl font-black text-white">{prediction.stats.sum}</div>
-                    </div>
-                    <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
-                      <div className="text-gray-400 mb-2 font-medium">AI 신뢰도</div>
-                      <div className="text-2xl font-black text-purple-400">{prediction.confidence}%</div>
-                    </div>
-                    <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
-                      <div className="text-gray-400 mb-2 font-medium">홀짝 비율</div>
-                      <div className="text-2xl font-black text-blue-300">{prediction.stats.oddEvenRatio}</div>
-                    </div>
-                    <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
-                      <div className="text-gray-400 mb-2 font-medium">고저 비율</div>
-                      <div className="text-2xl font-black text-purple-300">{prediction.stats.highLowRatio}</div>
-                    </div>
-                  </div>
-
+            <>
+              {/* 필터 적용 시 매칭 결과 수 표시 */}
+              {filterNumbers.length > 0 && (
+                <div className="w-full md:w-2/3 mb-4 text-sm text-purple-300 text-center">
+                  {quantumPredictions.filter(p => filterNumbers.some(n => p.numbers.includes(n))).length}개 조합 표시 중
+                  <span className="text-gray-500 text-xs ml-2">(전체 {quantumPredictions.length}개 중)</span>
                 </div>
-              ))}
-            </div>
+              )}
+              <div className="w-full grid grid-cols-1 xl:grid-cols-2 gap-4 animate-fade-in">
+                {quantumPredictions.map((prediction, index) => {
+                  const matchedNums = filterNumbers.filter(n => prediction.numbers.includes(n));
+                  if (filterNumbers.length > 0 && matchedNums.length === 0) return null;
+                  return (
+                    <div key={prediction.numbers.join('-')} className="bg-gray-900/80 rounded-2xl p-6 border border-purple-900/50 shadow-inner">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="text-sm text-purple-300 font-bold">양자 조합 #{index + 1}</div>
+                        {matchedNums.length > 0 && (
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-900/60 text-emerald-300 border border-emerald-700">
+                            선택 번호 {matchedNums.sort((a,b)=>a-b).join(', ')} 포함
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-nowrap justify-center gap-2 sm:gap-3 md:gap-4 mb-6">
+                        {prediction.numbers.map((num, i) => (
+                          <Ball key={i} num={num} onClick={() => handleBallClick(num)} />
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4 text-sm text-gray-300 border-t border-gray-700/50 pt-6">
+                        <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                          <div className="text-gray-400 mb-2 font-medium">총합</div>
+                          <div className="text-2xl font-black text-white">{prediction.stats.sum}</div>
+                        </div>
+                        <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                          <div className="text-gray-400 mb-2 font-medium">AI 신뢰도</div>
+                          <div className="text-2xl font-black text-purple-400">{prediction.confidence}%</div>
+                        </div>
+                        <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                          <div className="text-gray-400 mb-2 font-medium">홀짝 비율</div>
+                          <div className="text-2xl font-black text-blue-300">{prediction.stats.oddEvenRatio}</div>
+                        </div>
+                        <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                          <div className="text-gray-400 mb-2 font-medium">고저 비율</div>
+                          <div className="text-2xl font-black text-purple-300">{prediction.stats.highLowRatio}</div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
           )}
         </div>
 
@@ -526,35 +580,62 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* ── 최근 많이 나온 번호 Top 15 (가로형 카드 그리드) ── */}
+        {/* ── 출현 빈도 순위 (전체 1~45, 15개씩 3페이지) ── */}
         <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700 mt-8">
-          <div className="flex flex-col items-center border-b border-gray-700 pb-4 mb-6">
-            <h3 className="text-xl font-bold text-blue-300">262회차부터 최근 많이 나온 번호 (Top 15)</h3>
+          <div className="flex flex-col sm:flex-row items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
+            <h3 className="text-xl font-bold text-blue-300">262회차부터 출현 빈도 순위 (전체 1~45)</h3>
+            {/* 페이지 이동 버튼 */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setFreqPage(p => Math.max(0, p - 1))}
+                disabled={freqPage === 0}
+                className="px-3 py-1.5 rounded-lg bg-gray-700 text-gray-300 text-sm font-bold disabled:opacity-30 hover:bg-gray-600 transition-colors"
+              >◀</button>
+              <span className="text-sm text-gray-400 min-w-[56px] text-center">{freqPage + 1} / 3 페이지</span>
+              <button
+                onClick={() => setFreqPage(p => Math.min(2, p + 1))}
+                disabled={freqPage === 2}
+                className="px-3 py-1.5 rounded-lg bg-gray-700 text-gray-300 text-sm font-bold disabled:opacity-30 hover:bg-gray-600 transition-colors"
+              >▶</button>
+            </div>
           </div>
-          {/* 5열 × 3행 가로형 카드 레이아웃 */}
+
+          {/* 15개 카드 그리드 */}
           <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-            {chartData.map((item, index) => (
-              <div
-                key={item.num}
-                className="flex flex-col items-center bg-gray-900 rounded-xl p-3 border border-gray-700 hover:border-blue-500 transition-colors cursor-pointer"
-                onClick={() => handleBallClick(item.num)}
-              >
-                {/* 순위 */}
-                <span className={`text-[11px] font-bold mb-1 ${index < 3 ? 'text-yellow-400' : index < 5 ? 'text-gray-300' : 'text-gray-500'}`}>
-                  {index + 1}위
-                </span>
-                {/* 번호 공 */}
-                <Ball num={item.num} small />
-                {/* 출현 횟수 */}
-                <span className="text-xs text-gray-400 mt-1">{item.count}회</span>
-                {/* 미니 바 차트 */}
-                <div className="w-full h-1 bg-gray-800 rounded-full mt-1.5 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${index < 5 ? 'bg-blue-500' : 'bg-gray-600'}`}
-                    style={{ width: `${item.percentage}%` }}
-                  />
+            {chartData.slice(freqPage * 15, freqPage * 15 + 15).map((item) => {
+              const rank = chartData.findIndex(d => d.num === item.num); // 0-indexed global rank
+              return (
+                <div
+                  key={item.num}
+                  className="flex flex-col items-center bg-gray-900 rounded-xl p-3 border border-gray-700 hover:border-blue-500 transition-colors cursor-pointer"
+                  onClick={() => handleBallClick(item.num)}
+                >
+                  <span className={`text-[11px] font-bold mb-1 ${rank < 3 ? 'text-yellow-400' : rank < 5 ? 'text-gray-300' : rank < 15 ? 'text-blue-400' : 'text-gray-500'}`}>
+                    {rank + 1}위
+                  </span>
+                  <Ball num={item.num} small />
+                  <span className="text-xs text-gray-400 mt-1">{item.count}회</span>
+                  <div className="w-full h-1 bg-gray-800 rounded-full mt-1.5 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${rank < 5 ? 'bg-blue-500' : rank < 15 ? 'bg-blue-700' : 'bg-gray-600'}`}
+                      style={{ width: `${item.percentage}%` }}
+                    />
+                  </div>
                 </div>
-              </div>
+              );
+            })}
+          </div>
+
+          {/* 페이지 탭 */}
+          <div className="flex justify-center gap-2 mt-5">
+            {[0, 1, 2].map(p => (
+              <button
+                key={p}
+                onClick={() => setFreqPage(p)}
+                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors ${freqPage === p ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
+              >
+                {p * 15 + 1}위 ~ {p * 15 + 15}위
+              </button>
             ))}
           </div>
         </div>
@@ -1081,6 +1162,36 @@ const App: React.FC = () => {
                         </span>
                         <span className="text-[10px] text-gray-600">/ 범위 −1.00 ~ +1.00 · 임계값 ±0.10</span>
                       </div>
+
+                      {/* 다음 회차 출현 확률 */}
+                      {(() => {
+                        // 최근 30회 실제 출현율을 기반으로 기술 지표 보정 적용
+                        const baseRate = repeatAnalysis.recent30Occurrences / 30;
+                        const adjusted = baseRate * (1 + signalScore * 0.5);
+                        const prob = Math.max(1, Math.min(45, adjusted * 100));
+                        const expected = (7 / 45) * 100; // 6번호+보너스 기대값 ≈ 15.56%
+                        const diff = prob - expected;
+                        const diffStr = diff >= 0 ? `+${diff.toFixed(2)}%p` : `${diff.toFixed(2)}%p`;
+                        const probColor = prob >= 20 ? 'text-emerald-400' : prob >= 13 ? 'text-yellow-400' : 'text-blue-400';
+                        return (
+                          <div className="mt-3 pt-3 border-t border-gray-700/60 flex flex-col sm:flex-row sm:items-center gap-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-400">다음 회차 예측 출현 확률</span>
+                              <span className={`text-2xl font-black ${probColor}`}>{prob.toFixed(2)}%</span>
+                            </div>
+                            <div className="flex-1 space-y-1">
+                              <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full transition-all duration-700 ${prob >= 20 ? 'bg-emerald-500' : prob >= 13 ? 'bg-yellow-500' : 'bg-blue-500'}`}
+                                     style={{ width: `${Math.min(100, prob / 45 * 100)}%` }} />
+                              </div>
+                              <div className="flex justify-between text-[10px] text-gray-600">
+                                <span>기대값 {expected.toFixed(2)}% 대비 <span className={diff >= 0 ? 'text-emerald-500' : 'text-blue-500'}>{diffStr}</span></span>
+                                <span>기준: 최근 30회 출현율 × 기술지표 보정(×{(1 + signalScore * 0.5).toFixed(2)})</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* 최종 판단 배너 */}
