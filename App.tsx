@@ -164,7 +164,7 @@ const App: React.FC = () => {
     const nextPredictions = Array.from(unique.values());
 
     if (nextPredictions.length > 0) {
-      const nextHistory = new Set(generatedHistoryRef.current);
+      const nextHistory = new Set<string>(generatedHistoryRef.current);
       nextPredictions.forEach((prediction) => nextHistory.add(prediction.numbers.join('-')));
       generatedHistoryRef.current = nextHistory;
       saveGeneratedHistory(nextHistory);
