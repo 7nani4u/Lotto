@@ -885,6 +885,197 @@ const App: React.FC = () => {
               </div>
             </div>
 
+            {/* ── 기술 지표 분석 패널 (MA · RSI · 볼린저밴드 · Aroon) ── */}
+            <div className="mt-6 bg-gray-900 rounded-xl border border-cyan-800/50 p-5">
+              <h3 className="text-sm font-bold text-cyan-400 mb-1 flex items-center gap-2">
+                <span>📈</span> 기술 지표 분석
+                <span className="text-gray-500 font-normal text-xs">(MA · RSI · 볼린저밴드 · Aroon — 평균 회귀 관점)</span>
+              </h3>
+
+              {/* 종합 점수 바 */}
+              {(() => {
+                const ts = repeatAnalysis.techScore;
+                const tsColor = ts >= 65 ? 'text-emerald-400' : ts >= 45 ? 'text-yellow-400' : 'text-red-400';
+                const barColor = ts >= 65 ? 'bg-emerald-500' : ts >= 45 ? 'bg-yellow-500' : 'bg-red-500';
+                const tsLabel  = ts >= 75 ? '강한 회귀 신호' : ts >= 60 ? '중간 회귀 신호' : ts >= 45 ? '약한 회귀 신호' : ts >= 30 ? '약한 억제 신호' : '강한 억제 신호';
+                return (
+                  <div className="flex items-center gap-3 mb-4 mt-3 bg-gray-800/60 rounded-lg px-4 py-3 border border-gray-700">
+                    <div className="flex flex-col items-center min-w-[64px]">
+                      <span className="text-xs text-gray-400 mb-0.5">종합점수</span>
+                      <span className={`text-2xl font-black ${tsColor}`}>{ts.toFixed(1)}</span>
+                      <span className="text-[10px] text-gray-500">/ 100</span>
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex justify-between text-xs text-gray-400 mb-1">
+                        <span>{tsLabel}</span>
+                        <span className="text-gray-600">← 억제 &nbsp;&nbsp; 회귀 →</span>
+                      </div>
+                      <div className="w-full h-3 bg-gray-700 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${ts}%` }} />
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-1.5">
+                        Z(30%) + 볼린저(25%) + RSI(20%) + MA(15%) + Aroon(10%) 가중 평균 &nbsp;|&nbsp; 높을수록 과소출현 경향
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* 4개 지표 카드 그리드 */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+                {/* ① MA 이동평균 */}
+                {(() => {
+                  const v = repeatAnalysis.maSignal;
+                  const isCold = v < -0.01;
+                  const isHot  = v > 0.01;
+                  const badge  = isCold ? { label: '빈도 감소 추세', cls: 'bg-blue-900/60 text-blue-300' }
+                               : isHot  ? { label: '빈도 증가 추세', cls: 'bg-red-900/60 text-red-300' }
+                               :          { label: '중립', cls: 'bg-gray-700 text-gray-400' };
+                  return (
+                    <div className="bg-gray-800/70 rounded-xl p-4 border border-gray-700/60">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <div className="text-xs font-bold text-cyan-300">이동평균 (MA)</div>
+                          <div className="text-xs text-gray-500 mt-0.5">단기(10회) − 장기(30회) 빈도</div>
+                        </div>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${badge.cls}`}>{badge.label}</span>
+                      </div>
+                      <div className="text-xl font-black text-white mt-1">{v > 0 ? '+' : ''}{v.toFixed(4)}</div>
+                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                        {isCold
+                          ? `단기 빈도가 장기보다 낮습니다. 최근 출현 둔화 → 평균 회귀 기대.`
+                          : isHot
+                          ? `단기 빈도가 장기보다 높습니다. 최근 출현 집중 → 과열 가능성.`
+                          : `단기/장기 빈도가 거의 동일합니다. 추세 신호 없음.`}
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* ② RSI */}
+                {(() => {
+                  const v = repeatAnalysis.rsi;
+                  const isOversold   = v < 30;
+                  const isOverbought = v > 70;
+                  const badge = isOversold   ? { label: `과소출현 (과매도)`, cls: 'bg-blue-900/60 text-blue-300' }
+                              : isOverbought ? { label: `과다출현 (과매수)`, cls: 'bg-red-900/60 text-red-300' }
+                              :               { label: '중립 구간', cls: 'bg-gray-700 text-gray-400' };
+                  const barW = `${v}%`;
+                  const barC = isOversold ? 'bg-blue-500' : isOverbought ? 'bg-red-500' : 'bg-yellow-500';
+                  return (
+                    <div className="bg-gray-800/70 rounded-xl p-4 border border-gray-700/60">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <div className="text-xs font-bold text-cyan-300">RSI 출현 모멘텀</div>
+                          <div className="text-xs text-gray-500 mt-0.5">최근 20회 출현/미출현 비율</div>
+                        </div>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${badge.cls}`}>{badge.label}</span>
+                      </div>
+                      <div className="text-xl font-black text-white mt-1">{v.toFixed(1)}</div>
+                      <div className="w-full h-2 bg-gray-700 rounded-full mt-2 overflow-hidden">
+                        <div className={`h-full rounded-full ${barC}`} style={{ width: barW }} />
+                      </div>
+                      <div className="flex justify-between text-[10px] text-gray-600 mt-0.5">
+                        <span>0 (과매도)</span><span>50</span><span>100 (과매수)</span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                        {isOversold
+                          ? `RSI ${v.toFixed(1)} — 최근 출현이 매우 드뭅니다. 통계적 회귀 기대 ↑`
+                          : isOverbought
+                          ? `RSI ${v.toFixed(1)} — 최근 출현이 집중됩니다. 빈도 억제 가능성.`
+                          : `RSI ${v.toFixed(1)} — 정상 범위 내 출현 빈도입니다.`}
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* ③ 볼린저밴드 %B */}
+                {(() => {
+                  const v = repeatAnalysis.bollingerPctB;
+                  const isBelow = v < 0.15;
+                  const isAbove = v > 0.85;
+                  const badge = isBelow ? { label: '하단밴드 근처', cls: 'bg-blue-900/60 text-blue-300' }
+                              : isAbove ? { label: '상단밴드 근처', cls: 'bg-red-900/60 text-red-300' }
+                              :           { label: '밴드 내부', cls: 'bg-gray-700 text-gray-400' };
+                  const pct = Math.max(0, Math.min(100, v * 100));
+                  const dotPos = `${Math.max(2, Math.min(95, pct))}%`;
+                  return (
+                    <div className="bg-gray-800/70 rounded-xl p-4 border border-gray-700/60">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <div className="text-xs font-bold text-cyan-300">볼린저밴드 %B</div>
+                          <div className="text-xs text-gray-500 mt-0.5">45번호 롤링빈도(30회) 횡단면 밴드</div>
+                        </div>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${badge.cls}`}>{badge.label}</span>
+                      </div>
+                      <div className="text-xl font-black text-white mt-1">{v.toFixed(4)}</div>
+                      {/* %B 위치 트랙 */}
+                      <div className="relative w-full h-4 mt-2">
+                        <div className="absolute inset-y-0 left-0 right-0 bg-gradient-to-r from-blue-900 via-gray-700 to-red-900 rounded-full opacity-50" />
+                        <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white border-2 border-cyan-400 shadow"
+                             style={{ left: dotPos }} />
+                      </div>
+                      <div className="flex justify-between text-[10px] text-gray-600 mt-0.5">
+                        <span>LB(0)</span><span>중앙(0.5)</span><span>UB(1)</span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                        {isBelow
+                          ? `%B ${v.toFixed(3)} — 45개 번호 중 최하위 빈도권. 횡단면 과소출현.`
+                          : isAbove
+                          ? `%B ${v.toFixed(3)} — 45개 번호 중 최상위 빈도권. 횡단면 과다출현.`
+                          : `%B ${v.toFixed(3)} — 밴드 중앙 근처. 횡단면 평균 수준.`}
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* ④ Aroon 오실레이터 */}
+                {(() => {
+                  const v = repeatAnalysis.aroonOscillator;
+                  const isActive = v > 50;
+                  const isCold   = v < -50;
+                  const badge = isActive ? { label: '최근 활성 출현', cls: 'bg-orange-900/60 text-orange-300' }
+                              : isCold   ? { label: '장기 공백 패턴', cls: 'bg-blue-900/60 text-blue-300' }
+                              :            { label: '혼재 신호', cls: 'bg-gray-700 text-gray-400' };
+                  const pct    = ((v + 100) / 200) * 100;
+                  const dotPos = `${Math.max(2, Math.min(95, pct))}%`;
+                  return (
+                    <div className="bg-gray-800/70 rounded-xl p-4 border border-gray-700/60">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <div className="text-xs font-bold text-cyan-300">Aroon 오실레이터</div>
+                          <div className="text-xs text-gray-500 mt-0.5">마지막 출현 재귀 + 최장 공백</div>
+                        </div>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${badge.cls}`}>{badge.label}</span>
+                      </div>
+                      <div className="text-xl font-black text-white mt-1">{v > 0 ? '+' : ''}{v.toFixed(1)}</div>
+                      <div className="relative w-full h-4 mt-2">
+                        <div className="absolute inset-y-0 left-0 right-0 bg-gradient-to-r from-blue-900 via-gray-700 to-orange-900 rounded-full opacity-50" />
+                        <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white border-2 border-cyan-400 shadow"
+                             style={{ left: dotPos }} />
+                      </div>
+                      <div className="flex justify-between text-[10px] text-gray-600 mt-0.5">
+                        <span>−100(냉각)</span><span>0</span><span>+100(활성)</span>
+                      </div>
+                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                        {isActive
+                          ? `+${v.toFixed(0)} — 최근에 출현했고 공백이 짧습니다. 단기 활성 상태.`
+                          : isCold
+                          ? `${v.toFixed(0)} — 오랫동안 미출현하고 최장 공백이 깁니다. 회귀 기대.`
+                          : `${v > 0 ? '+' : ''}${v.toFixed(0)} — 출현/공백 신호가 혼재합니다.`}
+                      </p>
+                    </div>
+                  );
+                })()}
+              </div>{/* end grid */}
+
+              <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500 leading-relaxed">
+                ⚠️ 기술 지표는 <strong className="text-gray-400">통계적 패턴 참고 지표</strong>이며 당첨 확률을 높이지 않습니다.
+                복권은 매 회차 독립 추첨으로, 과거 패턴이 미래를 보장하지 않습니다.
+              </div>
+            </div>
+
             {/* 동반 출현 번호 Top 10 */}
             {repeatAnalysis.coOccurrenceTop10.length > 0 && (
               <div className="mt-6 bg-gray-900 rounded-xl border border-purple-800/50 p-5">

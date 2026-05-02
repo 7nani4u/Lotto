@@ -125,6 +125,12 @@ export interface RepeatAnalysis {
   insight: string;
   recommendation: string;
   zScore: number;
+  // 기술 지표 원시값 (분석 UI 표시용)
+  maSignal: number;        // 단기MA − 장기MA: 음수 = 최근 빈도 감소(회귀 기대)
+  rsi: number;             // 0~100: <30 과소출현, >70 과다출현
+  bollingerPctB: number;   // %B: <0 하단밴드 하회, 0.5 중앙, >1 상단밴드 초과
+  aroonOscillator: number; // −100~+100: 음수 = 장기 공백(회귀 기대)
+  techScore: number;       // 평균 회귀 방향 종합점수 0~100 (높을수록 회귀 기대)
   coOccurrenceTop10: CoOccurrenceEntry[];
 }
 
@@ -135,7 +141,9 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
       repeatAfterOne: 0, repeatAfterTwo: 0, repeatPercentage: 0, averageGap: 0,
       gapTrend: 'STABLE', lastSeenRound: 0, roundsSinceLastSeen: 0,
       confidenceLevel: 'LOW', insight: '데이터 부족', recommendation: '데이터 부족',
-      zScore: 0, coOccurrenceTop10: [],
+      zScore: 0,
+      maSignal: 0, rsi: 50, bollingerPctB: 0.5, aroonOscillator: 0, techScore: 50,
+      coOccurrenceTop10: [],
     };
   }
   const checkRounds = Math.min(lookbackRounds, results.length);
@@ -194,7 +202,7 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
     recommendation = `최근 ${checkRounds}회차 동안 단 한 번도 출현하지 않은 극단적 콜드 번호입니다.`;
   }
 
-  // Z-Score: 전체 데이터 기준 출현 빈도 통계
+  // ── Z-Score: 전체 데이터 기준 출현 빈도 통계 ──────────────────────────────
   const allFrequencies: Record<number, number> = {};
   for (let i = 1; i <= 45; i++) allFrequencies[i] = 0;
   results.forEach(r => {
@@ -206,6 +214,26 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
   const freqVariance = allFreqValues.reduce((a, b) => a + (b - freqMean) ** 2, 0) / 45;
   const freqStdDev = Math.sqrt(freqVariance);
   const zScore = freqStdDev > 0 ? (allFrequencies[targetNumber] - freqMean) / freqStdDev : 0;
+
+  // ── MA · RSI · 볼린저밴드 · Aroon 기술 지표 계산 ───────────────────────────
+  // buildTechnicalWeights는 섹션 4.5에 선언된 hoisted function declaration으로
+  // 파일 내 위치와 무관하게 호출 가능합니다.
+  const techScores = buildTechnicalWeights(results);
+  const techEntry  = techScores.find(s => s.number === targetNumber);
+
+  const maSignal        = techEntry?.maSignal        ?? 0;
+  const rsi             = techEntry?.rsi             ?? 50;
+  const bollingerPctB   = techEntry?.bollingerPctB   ?? 0.5;
+  const aroonOscillator = techEntry?.aroonOscillator ?? 0;
+
+  // 0~100 정규화 점수 (평균 회귀 방향: 과소출현 = 높은 점수)
+  const _sMA    = Math.max(0, Math.min(100, (-maSignal + 0.30) / 0.60 * 100));
+  const _sRSI   = Math.max(0, Math.min(100, 100 - rsi));
+  const _sBB    = Math.max(0, Math.min(100, (1 - bollingerPctB) * 100));
+  const _sAroon = Math.max(0, Math.min(100, (-aroonOscillator + 100) / 2));
+  const _sZ     = Math.max(0, Math.min(100, (-zScore + 3) / 6 * 100));
+  // 가중 평균: Z(30%) BB(25%) RSI(20%) MA(15%) Aroon(10%)
+  const techScore = +( 0.30*_sZ + 0.25*_sBB + 0.20*_sRSI + 0.15*_sMA + 0.10*_sAroon ).toFixed(2);
 
   // 동반 출현 번호 Top 10: 전체 데이터 기준
   const coOccurrenceMap: Record<number, number> = {};
@@ -227,7 +255,8 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
     targetNumber, totalOccurrences, recent10Occurrences, recent30Occurrences,
     repeatAfterOne, repeatAfterTwo, repeatPercentage, averageGap, gapTrend,
     lastSeenRound, roundsSinceLastSeen, confidenceLevel, insight, recommendation,
-    zScore, coOccurrenceTop10,
+    zScore, maSignal, rsi, bollingerPctB, aroonOscillator, techScore,
+    coOccurrenceTop10,
   };
 }
 
