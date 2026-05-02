@@ -131,6 +131,13 @@ export interface RepeatAnalysis {
   bollingerPctB: number;   // %B: <0 하단밴드 하회, 0.5 중앙, >1 상단밴드 초과
   aroonOscillator: number; // −100~+100: 음수 = 장기 공백(회귀 기대)
   techScore: number;       // 평균 회귀 방향 종합점수 0~100 (높을수록 회귀 기대)
+  // 이산 신호 점수: +1 회귀 / 0 중립 / -1 억제
+  maScore: number;
+  rsiScore: number;
+  bbScore: number;
+  aroonScore: number;
+  // 가중 합산 신호 점수 (MA 20% + RSI 30% + BB 35% + Aroon 15%) — 범위: −1.0 ~ +1.0
+  signalScore: number;
   coOccurrenceTop10: CoOccurrenceEntry[];
 }
 
@@ -143,6 +150,7 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
       confidenceLevel: 'LOW', insight: '데이터 부족', recommendation: '데이터 부족',
       zScore: 0,
       maSignal: 0, rsi: 50, bollingerPctB: 0.5, aroonOscillator: 0, techScore: 50,
+      maScore: 0, rsiScore: 0, bbScore: 0, aroonScore: 0, signalScore: 0,
       coOccurrenceTop10: [],
     };
   }
@@ -235,6 +243,14 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
   // 가중 평균: Z(30%) BB(25%) RSI(20%) MA(15%) Aroon(10%)
   const techScore = +( 0.30*_sZ + 0.25*_sBB + 0.20*_sRSI + 0.15*_sMA + 0.10*_sAroon ).toFixed(2);
 
+  // 이산 신호 점수: +1(회귀 신호) / 0(중립) / -1(억제 신호)
+  const maScore    = techEntry?.maScore    ?? 0;
+  const rsiScore   = techEntry?.rsiScore   ?? 0;
+  const bbScore    = techEntry?.bbScore    ?? 0;
+  const aroonScore = techEntry?.aroonScore ?? 0;
+  // 가중 합산 신호 점수 (MA 20% + RSI 30% + BB 35% + Aroon 15%)
+  const signalScore = techEntry?.signalScore ?? 0;
+
   // 동반 출현 번호 Top 10: 전체 데이터 기준
   const coOccurrenceMap: Record<number, number> = {};
   for (let i = 1; i <= 45; i++) if (i !== targetNumber) coOccurrenceMap[i] = 0;
@@ -256,6 +272,7 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
     repeatAfterOne, repeatAfterTwo, repeatPercentage, averageGap, gapTrend,
     lastSeenRound, roundsSinceLastSeen, confidenceLevel, insight, recommendation,
     zScore, maSignal, rsi, bollingerPctB, aroonOscillator, techScore,
+    maScore, rsiScore, bbScore, aroonScore, signalScore,
     coOccurrenceTop10,
   };
 }
@@ -448,6 +465,13 @@ export interface TechnicalIndicatorScore {
   bollingerPctB: number;   // %B: 0 = lower band, 1 = upper band; outside [0,1] = extreme deviation
   aroonOscillator: number; // −100 to +100: positive = appeared recently with short droughts
   compositeBoost: number;  // final multiplicative weight from all 4 indicators combined
+  // 이산 신호 점수: +1 회귀 신호 / 0 중립 / -1 억제 신호
+  maScore: number;
+  rsiScore: number;
+  bbScore: number;
+  aroonScore: number;
+  // 가중 합산 신호 점수 (MA 20% + RSI 30% + BB 35% + Aroon 15%) — 범위: −1.0 ~ +1.0
+  signalScore: number;
 }
 
 // ------------------------------------------------------------------
@@ -710,7 +734,16 @@ export function buildTechnicalWeights(
       maBoost * rsiBoost * bbBoost * aroonBoost
     ));
 
-    return { number: num, maSignal, rsi, bollingerPctB, aroonOscillator, compositeBoost };
+    // 이산 신호 점수 (평균 회귀 관점): +1 회귀 신호 / 0 중립 / -1 억제 신호
+    const maScore    = maSignal < -0.01 ? 1 : maSignal > 0.01 ? -1 : 0;
+    const rsiScore   = rsi < 30 ? 1 : rsi > 70 ? -1 : 0;
+    const bbScore    = bollingerPctB < 0.15 ? 1 : bollingerPctB > 0.85 ? -1 : 0;
+    const aroonScore = aroonOscillator < -50 ? 1 : aroonOscillator > 50 ? -1 : 0;
+    // 가중 합산: MA(20%) RSI(30%) BB(35%) Aroon(15%) — 범위: −1.0 ~ +1.0
+    const signalScore = +(0.20*maScore + 0.30*rsiScore + 0.35*bbScore + 0.15*aroonScore).toFixed(4);
+
+    return { number: num, maSignal, rsi, bollingerPctB, aroonOscillator, compositeBoost,
+             maScore, rsiScore, bbScore, aroonScore, signalScore };
   });
 }
 
