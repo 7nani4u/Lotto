@@ -748,6 +748,127 @@ export function buildTechnicalWeights(
 }
 
 // ==========================================
+// 4.6. FULL 45-NUMBER INDICATOR ANALYSIS TABLE
+// ==========================================
+//
+// buildFullAnalysisTable()는 1~45번 전체에 대해 5종 기술 지표(MA·RSI·볼린저밴드·Aroon·Z-Score)를
+// 계산하고 평균 회귀 방향으로 0~100 정규화한 뒤 가중 합산하여
+// 번호별 "출현 가능성 점수" 테이블을 반환합니다.
+//
+// [가중치]
+//   Z-Score     30% — 전체 히스토리 기반 빈도 통계 편차 (가장 신뢰도 높음)
+//   볼린저 %B   25% — 롤링 30회 횡단면 밴드 위치 (최근 분산 반영)
+//   RSI         20% — 최근 20회 출현/미출현 모멘텀
+//   MA          15% — 단기(10)/장기(30) 빈도 교차 신호
+//   Aroon       10% — 마지막 출현 재귀 + 최장 공백 지표
+//
+// [정규화 방향 — "과소출현 = 높은 점수"]
+//   Z-Score  → (-z + 3) / 6 × 100          (z 음수 = 저출현 → 높은 점수)
+//   볼린저%B → (1 − %B) × 100               (하단밴드 근처 → 높은 점수)
+//   RSI      → 100 − rsi                    (낮은 RSI = 과소출현 → 높은 점수)
+//   MA       → (−signal + 0.30) / 0.60 × 100 (빈도 감소 추세 → 높은 점수)
+//   Aroon    → (−osc + 100) / 2             (장기 공백 → 높은 점수)
+// ==========================================
+
+export interface FullIndicatorAnalysis {
+  number: number;
+  totalOccurrences: number;
+
+  // ── 원시 지표값 ──
+  maSignal: number;         // 단기(10)−장기(30) 이진 빈도 MA 교차
+  rsi: number;              // 출현 모멘텀 RSI (0~100)
+  bollingerPctB: number;    // 횡단면 볼린저 %B (0=하단, 1=상단)
+  aroonOscillator: number;  // 갭-재귀 Aroon 오실레이터 (−100~+100)
+  zScore: number;           // 전체 회차 기준 Z-Score
+
+  // ── 정규화 서브점수 (0~100, 높을수록 평균회귀 기대) ──
+  maSubScore: number;
+  rsiSubScore: number;
+  bbSubScore: number;
+  aroonSubScore: number;
+  zSubScore: number;
+
+  // ── 종합 출현 가능성 점수 (0~100) ──
+  compositeScore: number;
+
+  // ── 전체 45개 중 순위 ──
+  rank: number;
+}
+
+/**
+ * buildFullAnalysisTable
+ *
+ * 3단계 로직:
+ *   1단계: 5종 지표 원시값 계산 (Z-Score=전체 회차, 나머지=롤링 윈도우)
+ *   2단계: 각 지표를 "과소출현 = 높은 점수" 방향으로 0~100 정규화
+ *   3단계: 가중 합산 → 종합 출현 가능성 점수 (0~100)
+ */
+export function buildFullAnalysisTable(results: LottoResult[]): FullIndicatorAnalysis[] {
+  if (!results || results.length < 10) return [];
+
+  // ① Z-Score — 전체 회차 누적 빈도 (보너스 포함)
+  const allFreq: Record<number, number> = {};
+  for (let i = 1; i <= 45; i++) allFreq[i] = 0;
+  results.forEach(r => {
+    r.numbers.forEach(n => { allFreq[n]++; });
+    allFreq[r.bonus]++;
+  });
+  const freqVals = Object.values(allFreq);
+  const freqMean = freqVals.reduce((a, b) => a + b, 0) / 45;
+  const freqStd  = Math.sqrt(freqVals.reduce((s, v) => s + (v - freqMean) ** 2, 0) / 45) || 1;
+
+  // ② MA / RSI / 볼린저 / Aroon (section 4.5 hoisted function)
+  const techScores = buildTechnicalWeights(results);
+
+  // ③ 번호별 정규화 점수 계산
+  const raw: FullIndicatorAnalysis[] = Array.from({ length: 45 }, (_, i) => {
+    const num  = i + 1;
+    const tech = techScores[i];
+    const zScore = (allFreq[num] - freqMean) / freqStd;
+
+    // 0~100 정규화 — 과소출현 방향 = 높은 점수 (평균 회귀 기대)
+    const maSubScore    = Math.max(0, Math.min(100, (-tech.maSignal + 0.30) / 0.60 * 100));
+    const rsiSubScore   = Math.max(0, Math.min(100, 100 - tech.rsi));
+    const bbSubScore    = Math.max(0, Math.min(100, (1 - tech.bollingerPctB) * 100));
+    const aroonSubScore = Math.max(0, Math.min(100, (-tech.aroonOscillator + 100) / 2));
+    const zSubScore     = Math.max(0, Math.min(100, (-zScore + 3) / 6 * 100));
+
+    // 가중 합산: Z(30%) + BB(25%) + RSI(20%) + MA(15%) + Aroon(10%)
+    const compositeScore = +(
+      0.30 * zSubScore +
+      0.25 * bbSubScore +
+      0.20 * rsiSubScore +
+      0.15 * maSubScore +
+      0.10 * aroonSubScore
+    ).toFixed(1);
+
+    return {
+      number: num,
+      totalOccurrences: allFreq[num],
+      maSignal:        tech.maSignal,
+      rsi:             +tech.rsi.toFixed(1),
+      bollingerPctB:   tech.bollingerPctB,
+      aroonOscillator: +tech.aroonOscillator.toFixed(1),
+      zScore:          +zScore.toFixed(2),
+      maSubScore:      +maSubScore.toFixed(1),
+      rsiSubScore:     +rsiSubScore.toFixed(1),
+      bbSubScore:      +bbSubScore.toFixed(1),
+      aroonSubScore:   +aroonSubScore.toFixed(1),
+      zSubScore:       +zSubScore.toFixed(1),
+      compositeScore:  +compositeScore,
+      rank:            0,
+    };
+  });
+
+  // ④ 순위 부여 (종합 점수 내림차순)
+  [...raw]
+    .sort((a, b) => b.compositeScore - a.compositeScore)
+    .forEach((item, idx) => { raw[item.number - 1].rank = idx + 1; });
+
+  return raw;
+}
+
+// ==========================================
 // 5. STRATEGY ANALYSIS TYPES
 // ==========================================
 export interface StrategyTestResult {
