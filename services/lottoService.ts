@@ -1329,10 +1329,18 @@ export function generateQuantumFlux(
     }
 
     if (attempts % 4 === 0) {
-      candidates = candidates.map(n => applyQuantumFluctuation(n, quantumSigma));
+      // 고정 번호는 양자 요동에서 제외 — 요동 대상은 비고정 번호만
+      const fixedSet = new Set(fixedNumbers);
+      candidates = candidates.map(n =>
+        fixedSet.has(n) ? n : applyQuantumFluctuation(n, quantumSigma)
+      );
       candidates = [...new Set(candidates)];
       while (candidates.length < 6) candidates.push(Math.floor(Math.random() * 45) + 1);
       candidates = [...new Set(candidates)].sort((a, b) => a - b).slice(0, 6);
+      // 요동 후에도 고정 번호가 모두 포함되어 있는지 확인
+      if (fixedNumbers.length > 0 && !fixedNumbers.every(n => candidates.includes(n))) {
+        attempts--; continue;
+      }
     }
 
     if (candidates.length !== 6) { attempts--; continue; }

@@ -757,7 +757,7 @@ const App: React.FC = () => {
                                 <div className="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
                                   <div
                                     className="h-full bg-green-500 rounded-full"
-                                    style={{ width: `${(item.count / 2) * 100}%` }}
+                                    style={{ width: `${(item.count / 3) * 100}%` }}
                                   />
                                 </div>
                                 <span className="text-sm font-bold text-white w-6">{item.count}</span>
