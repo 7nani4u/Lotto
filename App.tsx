@@ -690,35 +690,6 @@ const App: React.FC = () => {
                   })}
                 </div>
 
-                {/* 각 추천 번호 해석 */}
-                <div className="space-y-1.5">
-                  {top6.map((item, idx) => {
-                    const reasons: string[] = [];
-                    if (item.zScore < -0.5)
-                      reasons.push(`Z-Score ${item.zScore > 0 ? '+' : ''}${item.zScore.toFixed(2)} → 전체 평균 대비 출현 부족`);
-                    if (item.rsi < 35)
-                      reasons.push(`RSI ${item.rsi.toFixed(0)} → 최근 출현 과소 (과매도 구간)`);
-                    if (item.bollingerPctB < 0.3)
-                      reasons.push(`볼린저 %B ${item.bollingerPctB.toFixed(2)} → 횡단면 하단밴드 근처`);
-                    if (item.aroonOscillator < -30)
-                      reasons.push(`Aroon ${item.aroonOscillator > 0 ? '+' : ''}${item.aroonOscillator.toFixed(0)} → 장기 공백 패턴`);
-                    if (item.maSignal < -0.01)
-                      reasons.push(`MA ${item.maSignal.toFixed(3)} → 단기 빈도 냉각 추세`);
-                    if (reasons.length === 0)
-                      reasons.push('복합 지표 균형 상태 — 뚜렷한 억제 신호 없음');
-                    const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400' : item.compositeScore >= 50 ? 'text-yellow-400' : 'text-gray-400';
-                    return (
-                      <div key={item.number} className="flex items-start gap-2 bg-gray-900 rounded-lg px-3 py-2 border border-gray-700/40">
-                        <span className="text-gray-600 text-xs flex-shrink-0 mt-0.5">#{idx + 1}</span>
-                        <div className="flex-shrink-0" onClick={() => handleBallClick(item.number)}>
-                          <Ball num={item.number} small />
-                        </div>
-                        <p className="text-gray-300 text-xs leading-relaxed flex-1 break-keep">{reasons.join(' · ')}</p>
-                        <span className={`text-sm font-black flex-shrink-0 ${scoreCls}`}>{item.compositeScore.toFixed(1)}</span>
-                      </div>
-                    );
-                  })}
-                </div>
               </div>
 
               {/* ── 전체 번호 분석 테이블 (펼치기/접기) ── */}
@@ -1385,113 +1356,100 @@ const App: React.FC = () => {
                 })()}
               </div>{/* end grid */}
 
-              {/* ── 종합 점수 및 최종 판단 ── */}
-              {(() => {
-                const { maScore, rsiScore, bbScore, aroonScore, signalScore } = repeatAnalysis;
-                const isGo    = signalScore >= 0.10;
-                const rows = [
-                  { name: '이동평균 (MA)',   weight: '20%', score: maScore,    contrib: (0.20 * maScore) },
-                  { name: 'RSI 모멘텀',       weight: '30%', score: rsiScore,   contrib: (0.30 * rsiScore) },
-                  { name: '볼린저밴드 %B',   weight: '35%', score: bbScore,    contrib: (0.35 * bbScore) },
-                  { name: 'Aroon 오실레이터', weight: '15%', score: aroonScore, contrib: (0.15 * aroonScore) },
-                ];
-                const scoreLabel = (s: number) =>
-                  s === 1 ? { txt: '+1', cls: 'text-emerald-400' } :
-                  s === -1 ? { txt: '−1', cls: 'text-red-400' } :
-                  { txt: '0', cls: 'text-gray-400' };
-                const contribLabel = (c: number) =>
-                  c > 0 ? `+${c.toFixed(2)}` : c < 0 ? c.toFixed(2) : '0.00';
+              {/* ── 전체 번호 출현 가능성 점수 테이블 ── */}
+              {indicatorTable.length > 0 && (() => {
+                const sorted = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore);
+                const getPattern = (item: FullIndicatorAnalysis) => {
+                  const { maSignal, rsi } = item;
+                  if (rsi > 65 && maSignal > 0.015)
+                    return { label: '상승', cls: 'text-red-400 bg-red-900/40 border border-red-800/60' };
+                  if (rsi < 35 && maSignal < -0.015)
+                    return { label: '하락', cls: 'text-blue-400 bg-blue-900/40 border border-blue-800/60' };
+                  if (Math.abs(maSignal) <= 0.012 && rsi >= 38 && rsi <= 62)
+                    return { label: '유지', cls: 'text-gray-400 bg-gray-700/40 border border-gray-600/50' };
+                  return { label: '변동', cls: 'text-yellow-400 bg-yellow-900/30 border border-yellow-800/60' };
+                };
+                const getFeature = (item: FullIndicatorAnalysis) => {
+                  const f: string[] = [];
+                  if (item.zScore < -1.0)             f.push('장기 저출현');
+                  else if (item.zScore > 1.0)          f.push('장기 과출현');
+                  if (item.rsi < 30)                   f.push('RSI 과소');
+                  else if (item.rsi > 70)              f.push('RSI 과다');
+                  if (item.bollingerPctB < 0.15)       f.push('BB 하단');
+                  else if (item.bollingerPctB > 0.85)  f.push('BB 상단');
+                  if (item.aroonOscillator < -60)      f.push('장기 공백');
+                  else if (item.aroonOscillator > 60)  f.push('단기 활성');
+                  return f.length > 0 ? f.join(' · ') : '평균 범위 내';
+                };
                 return (
-                  <div className="mt-4 bg-gray-800/60 rounded-xl border border-gray-700 overflow-hidden">
-                    {/* 점수 계산 테이블 */}
-                    <div className="px-4 pt-3 pb-2">
-                      <div className="text-xs font-bold text-gray-300 mb-2">종합 점수 계산</div>
-                      <div className="space-y-1">
-                        {rows.map(r => {
-                          const sl = scoreLabel(r.score);
-                          return (
-                            <div key={r.name} className="flex items-center text-xs gap-2">
-                              <span className="text-gray-500 w-[130px] flex-shrink-0">{r.name}</span>
-                              <span className="text-gray-600 w-8 text-right flex-shrink-0">{r.weight}</span>
-                              <span className="text-gray-600 mx-1">×</span>
-                              <span className={`font-black w-6 text-center flex-shrink-0 ${sl.cls}`}>{sl.txt}</span>
-                              <span className="text-gray-600 mx-1">=</span>
-                              <span className={`font-bold flex-shrink-0 ${r.contrib > 0 ? 'text-emerald-400' : r.contrib < 0 ? 'text-red-400' : 'text-gray-500'}`}>
-                                {contribLabel(r.contrib)}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className="mt-2 pt-2 border-t border-gray-700 flex items-center gap-3">
-                        <span className="text-xs text-gray-400">종합 점수 합산</span>
-                        <span className={`text-xl font-black ${signalScore >= 0.10 ? 'text-emerald-400' : signalScore <= -0.10 ? 'text-red-400' : 'text-yellow-400'}`}>
-                          {signalScore > 0 ? '+' : ''}{signalScore.toFixed(2)}
-                        </span>
-                        <span className="text-[10px] text-gray-600">/ 범위 −1.00 ~ +1.00 · 임계값 ±0.10</span>
-                      </div>
-
-                      {/* 다음 회차 출현 확률 */}
-                      {(() => {
-                        // 최근 30회 실제 출현율을 기반으로 기술 지표 보정 적용
-                        const baseRate = repeatAnalysis.recent30Occurrences / 30;
-                        const adjusted = baseRate * (1 + signalScore * 0.5);
-                        const prob = Math.max(1, Math.min(45, adjusted * 100));
-                        const expected = (7 / 45) * 100; // 6번호+보너스 기대값 ≈ 15.56%
-                        const diff = prob - expected;
-                        const diffStr = diff >= 0 ? `+${diff.toFixed(2)}%p` : `${diff.toFixed(2)}%p`;
-                        const probColor = prob >= 20 ? 'text-emerald-400' : prob >= 13 ? 'text-yellow-400' : 'text-blue-400';
-                        return (
-                          <div className="mt-3 pt-3 border-t border-gray-700/60 flex flex-col sm:flex-row sm:items-center gap-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs text-gray-400">다음 회차 예측 출현 확률</span>
-                              <span className={`text-2xl font-black ${probColor}`}>{prob.toFixed(2)}%</span>
-                            </div>
-                            <div className="flex-1 space-y-1">
-                              <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                                <div className={`h-full rounded-full transition-all duration-700 ${prob >= 20 ? 'bg-emerald-500' : prob >= 13 ? 'bg-yellow-500' : 'bg-blue-500'}`}
-                                     style={{ width: `${Math.min(100, prob / 45 * 100)}%` }} />
-                              </div>
-                              <div className="flex justify-between text-[10px] text-gray-600">
-                                <span>기대값 {expected.toFixed(2)}% 대비 <span className={diff >= 0 ? 'text-emerald-500' : 'text-blue-500'}>{diffStr}</span></span>
-                                <span>기준: 최근 30회 출현율 × 기술지표 보정(×{(1 + signalScore * 0.5).toFixed(2)})</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
+                  <div className="mt-4">
+                    <div className="text-xs font-bold text-cyan-400 mb-2 flex items-center gap-2">
+                      <span>📋</span> 전체 번호 출현 가능성 점수 (1~45번 · 점수 내림차순)
                     </div>
-
-                    {/* 최종 판단 배너 */}
-                    <div className={`px-4 py-3 border-t border-gray-700 ${isGo ? 'bg-emerald-950/60' : 'bg-red-950/50'}`}>
-                      <div className="flex items-center gap-3 mb-1.5">
-                        <span className="text-lg">{isGo ? '✅' : '❌'}</span>
-                        <span className={`text-base font-black ${isGo ? 'text-emerald-300' : 'text-red-300'}`}>
-                          최종 판단: {isGo ? '가져갈 만함' : '가져가지 않음'}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-400 leading-relaxed pl-8">
-                        {isGo
-                          ? (() => {
-                              const posNames = rows.filter(r => r.score === 1).map(r => r.name);
-                              const negNames = rows.filter(r => r.score === -1).map(r => r.name);
-                              const base = posNames.length > 0
-                                ? `${posNames.join(', ')} 지표에서 회귀 신호(+1)가 감지됩니다.`
-                                : '회귀 신호가 약하게 감지됩니다.';
-                              const neg = negNames.length > 0 ? ` (단, ${negNames.join(', ')}는 억제 신호 주의)` : '';
-                              return `종합 점수 ${signalScore > 0 ? '+' : ''}${signalScore.toFixed(2)} — ${base}${neg} 통계적 과소출현 관점에서 포함할 만합니다.`;
-                            })()
-                          : (() => {
-                              const negNames = rows.filter(r => r.score === -1).map(r => r.name);
-                              const posNames = rows.filter(r => r.score === 1).map(r => r.name);
-                              const base = negNames.length > 0
-                                ? `${negNames.join(', ')} 지표에서 억제 신호(−1)가 감지됩니다.`
-                                : '뚜렷한 회귀 신호가 없습니다.';
-                              const pos = posNames.length > 0 ? ` (단, ${posNames.join(', ')}는 회귀 신호 존재)` : '';
-                              return `종합 점수 ${signalScore > 0 ? '+' : ''}${signalScore.toFixed(2)} — ${base}${pos} 통계적으로 현재 과소출현 경향이 뚜렷하지 않습니다.`;
-                            })()
-                        }
-                      </p>
+                    <div className="overflow-x-auto rounded-xl border border-gray-700">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-gray-900 border-b border-gray-700">
+                            <th className="py-2 px-2 text-gray-500 font-bold text-center">순위</th>
+                            <th className="py-2 px-2 text-gray-500 font-bold text-center">번호</th>
+                            <th className="py-2 px-3 text-teal-400 font-bold text-center">출현 가능성<br/><span className="text-gray-600 font-normal text-[10px]">점수(0~100)</span></th>
+                            <th className="py-2 px-2 text-gray-500 font-bold text-center">패턴</th>
+                            <th className="py-2 px-3 text-gray-500 font-bold text-left">특징 요약</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sorted.map(item => {
+                            const isCurrent = item.number === selectedAnalysisNum;
+                            const pat = getPattern(item);
+                            const feat = getFeature(item);
+                            const rowCls = isCurrent
+                              ? 'bg-cyan-950/50 border-l-2 border-cyan-500'
+                              : item.rank <= 6 ? 'bg-teal-950/20' : '';
+                            const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400'
+                              : item.compositeScore >= 50 ? 'text-yellow-400'
+                              : item.compositeScore >= 35 ? 'text-gray-300' : 'text-blue-400';
+                            const barCls = item.compositeScore >= 65 ? 'bg-emerald-500'
+                              : item.compositeScore >= 50 ? 'bg-yellow-500'
+                              : item.compositeScore >= 35 ? 'bg-gray-500' : 'bg-blue-500';
+                            return (
+                              <tr key={item.number}
+                                  className={`border-b border-gray-800/60 hover:bg-gray-700/20 transition-colors ${rowCls}`}>
+                                <td className="py-1.5 px-2 text-center">
+                                  <span className={`font-black ${item.rank <= 3 ? 'text-yellow-400' : item.rank <= 6 ? 'text-teal-400' : 'text-gray-600'}`}>
+                                    {item.rank}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-2 text-center">
+                                  <div className="flex justify-center cursor-pointer"
+                                       onClick={() => handleBallClick(item.number)}>
+                                    <Ball num={item.number} small />
+                                  </div>
+                                </td>
+                                <td className="py-1.5 px-3 text-center">
+                                  <div className={`font-black text-sm ${scoreCls}`}>
+                                    {item.compositeScore.toFixed(1)}
+                                  </div>
+                                  <div className="w-full h-1 bg-gray-700 rounded-full mt-0.5 overflow-hidden">
+                                    <div className={`h-full rounded-full ${barCls}`}
+                                         style={{ width: `${item.compositeScore}%` }} />
+                                  </div>
+                                </td>
+                                <td className="py-1.5 px-2 text-center">
+                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pat.cls}`}>
+                                    {pat.label}
+                                  </span>
+                                </td>
+                                <td className="py-1.5 px-3">
+                                  <span className="text-gray-400 text-[11px]">{feat}</span>
+                                  {isCurrent && (
+                                    <span className="ml-1.5 text-[10px] font-black text-cyan-400">◀ 현재 선택</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 );
