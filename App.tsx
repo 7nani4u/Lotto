@@ -449,10 +449,10 @@ const App: React.FC = () => {
               <div className="mt-4">
                 <div>
                   <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white break-keep">
-                    보기 편하고 바로 쓸 수 있는 번호 추천
+                    AI 로또 조합 추출
                   </h2>
                   <p className="mt-3 max-w-3xl text-sm sm:text-base leading-6 text-gray-300 break-keep">
-                    조합 수를 선택하고 필요하면 고정 번호를 넣은 뒤 추천을 실행하세요. 복잡한 계산 과정은 내부에서 자동 처리하고, 화면에는 핵심 입력과 결과만 깔끔하게 보여줍니다.
+                    원하는 조합 수와 고정 번호를 설정한 뒤 최적의 로또 번호 조합을 추출해 보세요.
                   </p>
                 </div>
                 <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
