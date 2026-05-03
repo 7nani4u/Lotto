@@ -583,34 +583,7 @@ const App: React.FC = () => {
 
         {/* 내부 분석/최적화는 자동 실행되며 화면에는 표시하지 않음 */}
 
-        {/* ══ [1] 번호 출현 현황 ══ */}
-        {stats && (
-          <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-blue-900/40 mt-8">
-            <h2 className="text-lg font-bold text-blue-300 border-b border-gray-700 pb-3 mb-5 flex items-center gap-2">
-              <span>🔥</span> 번호 출현 현황
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-gray-900 rounded-xl p-4 border border-red-900/40">
-                <div className="text-xs font-bold text-red-400 mb-3 flex items-center gap-1.5">🔥 최다 출현 (Hot 5)</div>
-                <div className="flex gap-2 flex-wrap">
-                  {stats.hotNumbers.slice(0, 5).map(n => (
-                    <Ball key={n} num={n} small onClick={() => handleBallClick(n)} />
-                  ))}
-                </div>
-              </div>
-              <div className="bg-gray-900 rounded-xl p-4 border border-blue-900/40">
-                <div className="text-xs font-bold text-blue-400 mb-3 flex items-center gap-1.5">❄️ 최소 출현 (Cold 5)</div>
-                <div className="flex gap-2 flex-wrap">
-                  {stats.coldNumbers.slice(0, 5).map(n => (
-                    <Ball key={n} num={n} small onClick={() => handleBallClick(n)} />
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ══ [2] 출현 가능성 점수 상위 추천 번호 6개 + 전체 테이블 ══ */}
+        {/* ══ [1] 출현 가능성 점수 상위 추천 번호 6개 + 전체 테이블 ══ */}
         {indicatorTable.length > 0 && (() => {
           const top6 = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6);
           const sorted45 = [...indicatorTable].sort((a, b) => a.rank - b.rank);
@@ -742,6 +715,33 @@ const App: React.FC = () => {
             </div>
           );
         })()}
+
+        {/* ══ [2] 번호 출현 현황 ══ */}
+        {stats && (
+          <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-blue-900/40 mt-8">
+            <h2 className="text-lg font-bold text-blue-300 border-b border-gray-700 pb-3 mb-5 flex items-center gap-2">
+              <span>🔥</span> 번호 출현 현황
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="bg-gray-900 rounded-xl p-4 border border-red-900/40">
+                <div className="text-xs font-bold text-red-400 mb-3 flex items-center gap-1.5">🔥 최다 출현 (Hot 5)</div>
+                <div className="flex gap-2 flex-wrap">
+                  {stats.hotNumbers.slice(0, 5).map(n => (
+                    <Ball key={n} num={n} small onClick={() => handleBallClick(n)} />
+                  ))}
+                </div>
+              </div>
+              <div className="bg-gray-900 rounded-xl p-4 border border-blue-900/40">
+                <div className="text-xs font-bold text-blue-400 mb-3 flex items-center gap-1.5">❄️ 최소 출현 (Cold 5)</div>
+                <div className="flex gap-2 flex-wrap">
+                  {stats.coldNumbers.slice(0, 5).map(n => (
+                    <Ball key={n} num={n} small onClick={() => handleBallClick(n)} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ══ [3] 주요 통계 분석 ══ */}
         {/* 출현 빈도 순위 (전체 1~45, 15개씩 3페이지) */}
