@@ -736,24 +736,28 @@ const App: React.FC = () => {
               <div className="border border-gray-700 rounded-xl overflow-hidden">
                 <button
                   onClick={() => setShowFullTable(v => !v)}
-                  className="w-full flex items-center justify-between px-4 py-3 bg-gray-900 hover:bg-gray-700/50 transition-colors"
+                  className="w-full flex items-center justify-between px-3 sm:px-4 py-3 bg-gray-900 hover:bg-gray-700/50 transition-colors gap-2"
                 >
-                  <span className="text-sm font-bold text-gray-300 flex items-center gap-2">
-                    <span>📋</span> 전체 데이터 테이블
-                    <span className="text-xs text-gray-500 font-normal">— 1~45번 출현 가능성 점수 전체 (순위순)</span>
-                  </span>
-                  <span className="text-xs text-gray-500 font-bold flex-shrink-0">{showFullTable ? '▲ 접기' : '▼ 펼치기'}</span>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 text-left">
+                    <span className="text-sm font-bold text-gray-300 flex items-center gap-1.5 whitespace-nowrap">
+                      <span>📋</span> 전체 데이터 테이블
+                    </span>
+                    <span className="text-[10px] sm:text-xs text-gray-500 font-normal break-keep">
+                      — 1~45번 출현가능성 점수 전체 (순위순)
+                    </span>
+                  </div>
+                  <span className="text-xs text-gray-500 font-bold flex-shrink-0 whitespace-nowrap">{showFullTable ? '▲ 접기' : '▼ 펼치기'}</span>
                 </button>
                 {showFullTable && (
-                  <div className="overflow-x-auto border-t border-gray-700">
-                    <table className="w-full text-xs">
+                  <div className="overflow-x-auto border-t border-gray-700 custom-scrollbar">
+                    <table className="w-full text-xs min-w-[450px]">
                       <thead>
                         <tr className="bg-gray-900 border-b border-gray-700">
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center">순위</th>
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center">번호</th>
-                          <th className="py-2 px-3 text-teal-400 font-bold text-center">출현 가능성<br/><span className="text-gray-600 font-normal text-[10px]">점수(0~100)</span></th>
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center">패턴</th>
-                          <th className="py-2 px-3 text-gray-500 font-bold text-left">특징 요약</th>
+                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">순위</th>
+                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">번호</th>
+                          <th className="py-2 px-3 text-teal-400 font-bold text-center whitespace-nowrap">출현가능성 <span className="text-gray-600 font-normal text-[10px]">점수(0~100)</span></th>
+                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">패턴</th>
+                          <th className="py-2 px-3 text-gray-500 font-bold text-left whitespace-nowrap">특징 요약</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -780,16 +784,16 @@ const App: React.FC = () => {
                                   <Ball num={item.number} small />
                                 </div>
                               </td>
-                              <td className="py-1.5 px-3 text-center">
+                              <td className="py-1.5 px-3 text-center whitespace-nowrap">
                                 <div className={`font-black text-sm ${scoreCls}`}>{item.compositeScore.toFixed(1)}</div>
                                 <div className="w-full h-1 bg-gray-700 rounded-full mt-0.5 overflow-hidden">
                                   <div className={`h-full rounded-full ${barCls}`} style={{ width: `${item.compositeScore}%` }} />
                                 </div>
                               </td>
-                              <td className="py-1.5 px-2 text-center">
-                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${patObj.cls}`}>{patObj.label}</span>
+                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                                <span className={`inline-block text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${patObj.cls}`}>{patObj.label}</span>
                               </td>
-                              <td className="py-1.5 px-3">
+                              <td className="py-1.5 px-3 whitespace-nowrap">
                                 <span className="text-gray-400 text-[11px]">{feat}</span>
                               </td>
                             </tr>
