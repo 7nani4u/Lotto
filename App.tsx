@@ -432,10 +432,10 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8">
       <div className="max-w-5xl mx-auto space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 break-keep">
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 break-keep break-words">
             한국 로또 6/45 AI 마스터
           </h1>
-          <p className="text-gray-400 text-sm sm:text-base md:text-lg break-keep">인공지능과 통계 기반의 번호 예측 시스템</p>
+          <p className="text-gray-400 text-sm sm:text-base md:text-lg break-keep break-words">인공지능과 통계 기반의 번호 예측 시스템</p>
         </div>
 
         <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-2xl border border-purple-900/50">
@@ -448,10 +448,10 @@ const App: React.FC = () => {
               </div>
               <div className="mt-4">
                 <div>
-                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white break-keep">
+                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white break-keep break-words">
                     AI 로또 조합 추출
                   </h2>
-                  <p className="mt-3 max-w-3xl text-sm sm:text-base leading-6 text-gray-300 break-keep">
+                  <p className="mt-3 max-w-3xl text-sm sm:text-base leading-6 text-gray-300 break-keep break-words">
                     원하는 조합 수와 고정 번호를 설정한 뒤 최적의 로또 번호 조합을 추출해 보세요.
                   </p>
                 </div>
@@ -590,14 +590,14 @@ const App: React.FC = () => {
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <div className="text-base font-bold text-white">3. 추천 실행</div>
-                  <div className="mt-1 text-sm text-gray-300 break-keep">
+                  <div className="mt-1 text-sm text-gray-300 break-keep break-words">
                     선택한 조건을 기준으로 중복 이력을 피한 새 조합을 생성합니다.
                   </div>
                 </div>
                 <button
                   onClick={() => { void handleGenerateQuantum(); }}
                   disabled={isGenerateDisabled}
-                  className={`w-full md:w-auto px-6 sm:px-8 py-3.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-2xl font-black text-lg sm:text-xl shadow-[0_0_20px_rgba(147,51,234,0.35)] transition-all transform active:scale-95 flex items-center justify-center gap-2 break-keep ${
+                  className={`w-full md:w-auto px-6 sm:px-8 py-3.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-2xl font-black text-lg sm:text-xl shadow-[0_0_20px_rgba(147,51,234,0.35)] transition-all transform active:scale-95 flex items-center justify-center gap-2 break-keep break-words ${
                     isGenerateDisabled ? 'cursor-not-allowed opacity-60' : 'hover:scale-[1.02] hover:from-purple-500 hover:to-indigo-500'
                   }`}
                 >
@@ -896,7 +896,7 @@ const App: React.FC = () => {
         <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-gray-700 mt-8">
           <div className="flex flex-col md:flex-row items-center justify-between border-b border-gray-700 pb-4 mb-6">
             <h2 className="text-lg font-bold text-blue-300 flex items-center gap-2"><span>📅</span> 보조 분석 — 최근 당첨 번호</h2>
-            <div className="text-xs sm:text-sm text-gray-400 bg-gray-700/40 px-3 py-2 rounded-xl mt-3 md:mt-0 flex flex-col sm:flex-row items-center gap-1 sm:gap-3 text-center break-keep">
+            <div className="text-xs sm:text-sm text-gray-400 bg-gray-700/40 px-3 py-2 rounded-xl mt-3 md:mt-0 flex flex-col sm:flex-row items-center gap-1 sm:gap-3 text-center break-keep break-words">
               <span className="text-yellow-400">💡 번호 클릭 → 정밀 분석</span>
               <span className="hidden sm:block text-gray-600">|</span>
               <span className="text-green-400">📋 번호 외 영역 클릭 → 회차 리포트</span>
@@ -952,7 +952,7 @@ const App: React.FC = () => {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
                       <h2 className="text-lg sm:text-xl font-bold text-green-300 flex items-center gap-2">
                         <span>📋</span>
-                        <span className="break-keep">제 {dynamicData.round}회 당첨 번호 분석 리포트</span>
+                        <span className="break-keep break-words">제 {dynamicData.round}회 당첨 번호 분석 리포트</span>
                       </h2>
                     </div>
 
@@ -1120,9 +1120,9 @@ const App: React.FC = () => {
 
         {selectedAnalysisNum && repeatAnalysis && (
           <div ref={analysisReportRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/50 mt-8">
-            <h2 className="text-xl sm:text-2xl font-bold mb-6 text-blue-300 flex items-center justify-center md:justify-start gap-2 sm:gap-3 border-b border-gray-700 pb-4 break-keep">
+            <h2 className="text-xl sm:text-2xl font-bold mb-6 text-blue-300 flex items-center justify-center md:justify-start gap-2 sm:gap-3 border-b border-gray-700 pb-4 break-keep break-words">
               <Ball num={selectedAnalysisNum} small />
-              <span className="whitespace-nowrap">선택 번호 정밀 분석 리포트</span>
+              <span>선택 번호 정밀 분석 리포트</span>
             </h2>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1174,7 +1174,7 @@ const App: React.FC = () => {
                     {repeatAnalysis.insight}
                   </span>
                 </div>
-                <p className="text-gray-300 leading-relaxed text-sm md:text-base">{repeatAnalysis.recommendation}</p>
+                <p className="text-gray-300 leading-relaxed text-sm md:text-base break-words">{repeatAnalysis.recommendation}</p>
                 <div className="mt-4 pt-3 border-t border-gray-800 text-xs text-gray-500">
                   마지막 출현: {repeatAnalysis.lastSeenRound > 0 ? `${repeatAnalysis.lastSeenRound}회차` : '기록 없음'}
                 </div>
@@ -1216,14 +1216,14 @@ const App: React.FC = () => {
                         </div>
                       </div>
                       <div className="text-xl font-black text-white mt-1">{v > 0 ? '+' : ''}{v.toFixed(4)}</div>
-                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed break-words">
                         {isCold
                           ? `단기 빈도가 장기보다 낮습니다. 최근 출현 둔화 → 평균 회귀 기대.`
                           : isHot
                           ? `단기 빈도가 장기보다 높습니다. 최근 출현 집중 → 과열 가능성.`
                           : `단기/장기 빈도가 거의 동일합니다. 추세 신호 없음.`}
                       </p>
-                      <div className="mt-2 text-[10px] text-gray-600">가중치 20% · 기준: 신호 &lt; −0.01 → +1 / 신호 &gt; +0.01 → −1</div>
+                      <div className="mt-2 text-[10px] text-gray-600 break-words">가중치 20% · 기준: 신호 &lt; −0.01 → +1 / 신호 &gt; +0.01 → −1</div>
                     </div>
                   );
                 })()}
@@ -1260,14 +1260,14 @@ const App: React.FC = () => {
                       <div className="flex justify-between text-[10px] text-gray-600 mt-0.5">
                         <span>0 (과매도)</span><span>50</span><span>100 (과매수)</span>
                       </div>
-                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed break-words">
                         {isOversold
                           ? `RSI ${v.toFixed(1)} — 최근 출현이 매우 드뭅니다. 통계적 회귀 기대 ↑`
                           : isOverbought
                           ? `RSI ${v.toFixed(1)} — 최근 출현이 집중됩니다. 빈도 억제 가능성.`
                           : `RSI ${v.toFixed(1)} — 정상 범위 내 출현 빈도입니다.`}
                       </p>
-                      <div className="mt-2 text-[10px] text-gray-600">가중치 30% · 기준: RSI &lt; 30 → +1 / RSI &gt; 70 → −1</div>
+                      <div className="mt-2 text-[10px] text-gray-600 break-words">가중치 30% · 기준: RSI &lt; 30 → +1 / RSI &gt; 70 → −1</div>
                     </div>
                   );
                 })()}
@@ -1307,14 +1307,14 @@ const App: React.FC = () => {
                       <div className="flex justify-between text-[10px] text-gray-600 mt-0.5">
                         <span>LB(0)</span><span>중앙(0.5)</span><span>UB(1)</span>
                       </div>
-                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed break-words">
                         {isBelow
                           ? `%B ${v.toFixed(3)} — 45개 번호 중 최하위 빈도권. 횡단면 과소출현.`
                           : isAbove
                           ? `%B ${v.toFixed(3)} — 45개 번호 중 최상위 빈도권. 횡단면 과다출현.`
                           : `%B ${v.toFixed(3)} — 밴드 중앙 근처. 횡단면 평균 수준.`}
                       </p>
-                      <div className="mt-2 text-[10px] text-gray-600">가중치 35% · 기준: %B &lt; 0.15 → +1 / %B &gt; 0.85 → −1</div>
+                      <div className="mt-2 text-[10px] text-gray-600 break-words">가중치 35% · 기준: %B &lt; 0.15 → +1 / %B &gt; 0.85 → −1</div>
                     </div>
                   );
                 })()}
@@ -1354,14 +1354,14 @@ const App: React.FC = () => {
                       <div className="flex justify-between text-[10px] text-gray-600 mt-0.5">
                         <span>−100(냉각)</span><span>0</span><span>+100(활성)</span>
                       </div>
-                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                      <p className="text-[11px] text-gray-400 mt-2 leading-relaxed break-words">
                         {isActive
                           ? `+${v.toFixed(0)} — 최근에 출현했고 공백이 짧습니다. 단기 활성 상태.`
                           : isCold
                           ? `${v.toFixed(0)} — 오랫동안 미출현하고 최장 공백이 깁니다. 회귀 기대.`
                           : `${v > 0 ? '+' : ''}${v.toFixed(0)} — 출현/공백 신호가 혼재합니다.`}
                       </p>
-                      <div className="mt-2 text-[10px] text-gray-600">가중치 15% · 기준: Aroon &lt; −50 → +1 / Aroon &gt; +50 → −1</div>
+                      <div className="mt-2 text-[10px] text-gray-600 break-words">가중치 15% · 기준: Aroon &lt; −50 → +1 / Aroon &gt; +50 → −1</div>
                     </div>
                   );
                 })()}
@@ -1416,7 +1416,7 @@ const App: React.FC = () => {
                     {/* 특징 요약 */}
                     <div className="bg-gray-800/70 rounded-xl p-4 border border-gray-700/60 flex flex-col items-center justify-center gap-2">
                       <div className="text-xs text-gray-500 font-bold">특징 요약</div>
-                      <div className="text-xs text-gray-300 text-center leading-relaxed">{feat}</div>
+                      <div className="text-xs text-gray-300 text-center leading-relaxed break-words">{feat}</div>
                     </div>
                   </div>
                 );
@@ -1452,7 +1452,7 @@ const App: React.FC = () => {
                     <div className="w-3 h-3 rounded-full bg-blue-400 flex-shrink-0" />
                     <span><strong className="text-blue-300">Z &lt; -1.0</strong>: 평균보다 유의미하게 적게 출현한 번호 (저출현)</span>
                   </div>
-                  <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500">
+                  <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500 break-words">
                     Z-Score = (해당 번호 출현 빈도 − 전체 평균 빈도) ÷ 표준편차 &nbsp;|&nbsp; 전체 1~45번 기준 계산
                   </div>
                 </div>
@@ -1490,7 +1490,7 @@ const App: React.FC = () => {
                     );
                   })}
                 </div>
-                <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500">
+                <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500 break-words">
                   * 전체 회차(262회차~) 데이터 기준. 공을 클릭하면 해당 번호의 정밀 분석으로 이동합니다.
                 </div>
               </div>
