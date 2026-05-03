@@ -19,6 +19,7 @@ import {
 import { LottoResult, PredictionResult } from './types';
 
 const GENERATED_HISTORY_KEY = 'lottoQuantumGeneratedHistoryV1';
+const MAX_FIXED_NUMBERS = 5;
 
 const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; small?: boolean; responsive?: boolean }> = ({
   num,
@@ -306,6 +307,26 @@ const App: React.FC = () => {
     }
   };
 
+  const handleAddFixedNumber = () => {
+    const n = parseInt(fixedInput, 10);
+    const canAdd =
+      !Number.isNaN(n) &&
+      n >= 1 &&
+      n <= 45 &&
+      !fixedNumbers.includes(n) &&
+      fixedNumbers.length < MAX_FIXED_NUMBERS;
+
+    if (canAdd) {
+      setFixedNumbers((prev) => [...prev, n].sort((a, b) => a - b));
+    }
+
+    setFixedInput('');
+  };
+
+  const handleRemoveFixedNumber = (num: number) => {
+    setFixedNumbers((prev) => prev.filter((value) => value !== num));
+  };
+
   // 동적으로 특정 회차의 리포트 데이터를 계산하는 함수
   const generateDynamicReportData = (draw: LottoResult) => {
     const nums = draw.numbers;
@@ -380,6 +401,14 @@ const App: React.FC = () => {
     };
   };
 
+  const fixedNumbersRemaining = MAX_FIXED_NUMBERS - fixedNumbers.length;
+  const fixedNumberLimitReached = fixedNumbersRemaining === 0;
+  const hasPredictionResults = quantumPredictions.length > 0;
+  const isEngineBusy = isAnalyzing || isOptimizingQuantum;
+  const isGenerateDisabled = isEngineBusy || isGeneratingQuantum;
+  const normalizedFixedInput = fixedInput.trim();
+  const canSubmitFixedNumber = normalizedFixedInput !== '' && !fixedNumberLimitReached;
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center space-y-4">
@@ -409,139 +438,195 @@ const App: React.FC = () => {
           <p className="text-gray-400 text-sm sm:text-base md:text-lg break-keep">인공지능과 통계 기반의 번호 예측 시스템</p>
         </div>
 
-        <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-2xl border border-purple-900/50 flex flex-col items-center text-center">
-          <h2 className="text-2xl sm:text-3xl font-extrabold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-indigo-400 border-b border-gray-700 pb-4 w-full flex items-center justify-center gap-2 sm:gap-3 break-keep">
-            <span>🌌</span> 양자 변동 번호 추천
-          </h2>
-          <p className="text-gray-400 text-xs sm:text-sm mb-8 max-w-2xl break-keep">
-            피타고라스·피보나치/황금비(φ)·가우스 정규분포·Pareto 80/20·Whitson 패턴법칙·양자 요동 노이즈·<strong className="text-purple-300">Z-Score 통계보정</strong>·<strong className="text-purple-300">동반출현 시너지</strong>·<strong className="text-blue-300">MA 빈도추세</strong>·<strong className="text-blue-300">RSI 빈도모멘텀</strong>·<strong className="text-blue-300">볼린저밴드 편차</strong>·<strong className="text-blue-300">Aroon 갭재귀</strong>의 <strong className="text-purple-300">12종 수학/통계 기법</strong>을 W(n)=G×P×F×φ×Py×Q×Z×C×T 공식으로 통합한 뒤, Python 6종 고급 필터를 통과한 확률 최적화 조합만 추출합니다.
-          </p>
+        <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-2xl border border-purple-900/50">
+          <div className="flex flex-col gap-8">
+            <div className="text-center md:text-left">
+              <div className="inline-flex items-center gap-2 rounded-full border border-purple-700/40 bg-purple-950/40 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-purple-200">
+                <span>추천 엔진</span>
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                <span>{isEngineBusy ? '준비 중' : '사용 가능'}</span>
+              </div>
+              <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <h2 className="text-2xl sm:text-3xl font-extrabold text-white break-keep">
+                    보기 편하고 바로 쓸 수 있는 번호 추천
+                  </h2>
+                  <p className="mt-3 max-w-2xl text-sm sm:text-base leading-6 text-gray-300 break-keep">
+                    조합 수를 선택하고 필요하면 고정 번호를 넣은 뒤 추천을 실행하세요. 복잡한 계산 과정은 내부에서 자동 처리하고, 화면에는 핵심 입력과 결과만 깔끔하게 보여줍니다.
+                  </p>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-left text-xs sm:text-sm">
+                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-3">
+                    <div className="text-gray-500">추천 조합</div>
+                    <div className="mt-1 text-lg font-black text-white">{combinationCount}개</div>
+                  </div>
+                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-3">
+                    <div className="text-gray-500">고정 번호</div>
+                    <div className="mt-1 text-lg font-black text-purple-300">{fixedNumbers.length}개</div>
+                  </div>
+                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-3">
+                    <div className="text-gray-500">복사 가능</div>
+                    <div className="mt-1 text-lg font-black text-emerald-300">{hasPredictionResults ? '예' : '대기'}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
-          {/* ── 컨트롤 바 (조합 수 · 고정 번호 · 복사) ── */}
-          {(() => {
-            const addFixed = () => {
-              const n = parseInt(fixedInput, 10);
-              if (!isNaN(n) && n >= 1 && n <= 45 && !fixedNumbers.includes(n) && fixedNumbers.length < 5) {
-                setFixedNumbers(prev => [...prev, n].sort((a, b) => a - b));
-              }
-              setFixedInput('');
-            };
-            return (
-              <div className="w-full md:w-2/3 mb-6 bg-gray-900/70 border border-purple-900/40 rounded-2xl p-4 space-y-3">
-                {/* 1행: 조합 수 + 고정 번호 입력 + 복사 버튼 */}
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* 조합 수 */}
-                  <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2">
-                    <span className="text-xs text-gray-400 whitespace-nowrap">조합 수</span>
-                    <select
-                      value={combinationCount}
-                      onChange={(e) => setCombinationCount(Number(e.target.value))}
-                      className="bg-gray-700 text-white text-sm rounded-lg px-2 py-1 border border-gray-600 outline-none"
-                    >
-                      {Array.from({ length: 20 }, (_, i) => i + 1).map((count) => (
-                        <option key={count} value={count}>{count}개</option>
-                      ))}
-                    </select>
+            <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_1.4fr] gap-4">
+              <div className="rounded-2xl border border-gray-700 bg-gray-900/70 p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-bold text-white">1. 추천 개수 선택</div>
+                    <div className="mt-1 text-xs leading-5 text-gray-400">한 번에 받을 조합 수를 정합니다.</div>
+                  </div>
+                  <div className="rounded-full bg-blue-950/60 px-2.5 py-1 text-[11px] font-bold text-blue-300">
+                    1~20개
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <label className="mb-2 block text-xs font-bold text-gray-400">추천 조합 수</label>
+                  <select
+                    value={combinationCount}
+                    onChange={(e) => setCombinationCount(Number(e.target.value))}
+                    className="w-full rounded-xl border border-gray-600 bg-gray-800 px-4 py-3 text-base font-semibold text-white outline-none transition-colors focus:border-blue-500"
+                  >
+                    {Array.from({ length: 20 }, (_, i) => i + 1).map((count) => (
+                      <option key={count} value={count}>{count}개</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-purple-900/40 bg-gray-900/70 p-5">
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="text-sm font-bold text-white">2. 고정 번호 설정</div>
+                      <div className="mt-1 text-xs leading-5 text-gray-400">
+                        꼭 넣고 싶은 번호가 있으면 추가하세요. 최대 {MAX_FIXED_NUMBERS}개까지 설정할 수 있습니다.
+                      </div>
+                    </div>
+                    <div className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${fixedNumberLimitReached ? 'bg-amber-950/70 text-amber-300' : 'bg-purple-950/60 text-purple-300'}`}>
+                      {fixedNumberLimitReached ? '입력 완료' : `${fixedNumbersRemaining}개 더 추가 가능`}
+                    </div>
                   </div>
 
-                  {/* 구분선 */}
-                  <div className="hidden sm:block w-px h-8 bg-gray-700" />
-
-                  {/* 고정 번호 레이블 */}
-                  <span className="text-xs text-purple-400 font-bold whitespace-nowrap">고정 번호</span>
-
-                  {/* 번호 입력 */}
-                  <input
-                    type="number"
-                    min={1} max={45}
-                    value={fixedInput}
-                    onChange={e => setFixedInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') addFixed(); }}
-                    placeholder="1~45"
-                    disabled={fixedNumbers.length >= 5}
-                    className="w-16 bg-gray-800 text-white text-sm rounded-lg px-2 py-2 border border-gray-600 outline-none disabled:opacity-40 text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                  />
-                  <button
-                    onClick={addFixed}
-                    disabled={fixedNumbers.length >= 5 || fixedInput === ''}
-                    className="px-3 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold transition-colors disabled:opacity-40"
-                  >추가</button>
-                  {fixedNumbers.length > 0 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={45}
+                      value={fixedInput}
+                      onChange={(e) => setFixedInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddFixedNumber(); }}
+                      placeholder="번호 입력 (1~45)"
+                      disabled={fixedNumberLimitReached}
+                      className="w-full rounded-xl border border-gray-600 bg-gray-800 px-4 py-3 text-center text-base font-semibold text-white outline-none transition-colors focus:border-purple-500 disabled:cursor-not-allowed disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                    <button
+                      onClick={handleAddFixedNumber}
+                      disabled={!canSubmitFixedNumber}
+                      className="rounded-xl bg-purple-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      번호 추가
+                    </button>
                     <button
                       onClick={() => setFixedNumbers([])}
-                      className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs transition-colors"
-                    >초기화</button>
-                  )}
+                      disabled={fixedNumbers.length === 0}
+                      className="rounded-xl border border-gray-600 bg-gray-800 px-4 py-3 text-sm font-bold text-gray-300 transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      전체 지우기
+                    </button>
+                  </div>
 
-                  {/* 복사 버튼 (결과 있을 때만) */}
-                  {quantumPredictions.length > 0 && !isGeneratingQuantum && (
-                    <>
-                      <div className="hidden sm:block w-px h-8 bg-gray-700" />
+                  <div className="rounded-xl border border-dashed border-gray-700 bg-gray-950/40 px-4 py-3">
+                    <div className="mb-2 text-xs font-bold text-gray-500">선택한 고정 번호</div>
+                    <div className="flex min-h-[36px] flex-wrap items-center gap-2">
+                      {fixedNumbers.length === 0 ? (
+                        <span className="text-xs text-gray-500">아직 선택한 번호가 없습니다.</span>
+                      ) : (
+                        fixedNumbers.map((n) => {
+                          const chipCls = n <= 10 ? 'bg-yellow-600' : n <= 20 ? 'bg-blue-600' : n <= 30 ? 'bg-red-600' : n <= 40 ? 'bg-gray-500' : 'bg-green-600';
+                          return (
+                            <span key={n} className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-black text-white ${chipCls}`}>
+                              {n}
+                              <button
+                                onClick={() => handleRemoveFixedNumber(n)}
+                                className="leading-none text-white/75 transition-colors hover:text-white"
+                                aria-label={`${n}번 고정 번호 제거`}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
+                  {hasPredictionResults && !isGeneratingQuantum && (
+                    <div className="flex justify-end">
                       <button
                         onClick={() => { void handleCopyPredictions(); }}
-                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs transition-all duration-300 ${
+                        className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-bold transition-all duration-300 ${
                           copySuccess
                             ? 'bg-green-600 text-white'
-                            : 'bg-gray-700 text-gray-300 border border-gray-600 hover:bg-gray-600'
+                            : 'border border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700'
                         }`}
                       >
-                        {copySuccess ? '✅ 복사 완료' : '📋 복사'}
+                        <span>{copySuccess ? '완료' : '복사'}</span>
+                        <span>{copySuccess ? '저장됨' : '결과 복사'}</span>
                       </button>
-                    </>
-                  )}
-                </div>
-
-                {/* 2행: 선택된 고정 번호 칩 */}
-                <div className="flex flex-wrap items-center gap-1.5 min-h-[28px]">
-                  {fixedNumbers.length === 0 ? (
-                    <span className="text-[11px] text-gray-600">고정 번호 없음 — 최대 5개 설정 가능</span>
-                  ) : (
-                    fixedNumbers.map(n => {
-                      const chipCls = n <= 10 ? 'bg-yellow-600' : n <= 20 ? 'bg-blue-600' : n <= 30 ? 'bg-red-600' : n <= 40 ? 'bg-gray-500' : 'bg-green-600';
-                      return (
-                        <span key={n} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full ${chipCls} text-white text-xs font-black`}>
-                          {n}
-                          <button
-                            onClick={() => setFixedNumbers(prev => prev.filter(x => x !== n))}
-                            className="text-white/70 hover:text-white leading-none"
-                          >×</button>
-                        </span>
-                      );
-                    })
+                    </div>
                   )}
                 </div>
               </div>
-            );
-          })()}
+            </div>
 
-          <button
-            onClick={() => { void handleGenerateQuantum(); }}
-            disabled={isAnalyzing || isOptimizingQuantum || isGeneratingQuantum}
-            className={`w-full md:w-2/3 px-4 sm:px-8 py-3 sm:py-4 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-2xl font-black text-xl sm:text-2xl shadow-[0_0_20px_rgba(147,51,234,0.4)] transition-all transform hover:scale-[1.02] active:scale-95 mb-8 flex items-center justify-center gap-2 sm:gap-3 break-keep ${isAnalyzing || isOptimizingQuantum || isGeneratingQuantum ? 'opacity-60 cursor-not-allowed' : ''}`}
-          >
-            {isAnalyzing || isOptimizingQuantum ? (
-              <><span className="animate-spin">⚙️</span> <span className="whitespace-nowrap">AI 엔진 준비 중...</span></>
-            ) : isGeneratingQuantum ? (
-              <><span className="animate-spin">🎲</span> <span className="whitespace-nowrap">추출하는 중...</span></>
-            ) : (
-              <><span>🚀</span> <span className="whitespace-nowrap">양자 변동 번호 추출</span></>
-            )}
-          </button>
+            <div className="rounded-2xl border border-indigo-900/40 bg-gradient-to-r from-purple-950/40 to-indigo-950/40 p-4 sm:p-5">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <div className="text-sm font-bold text-white">3. 추천 실행</div>
+                  <div className="mt-1 text-sm text-gray-300 break-keep">
+                    선택한 조건을 기준으로 중복 이력을 피한 새 조합을 생성합니다.
+                  </div>
+                </div>
+                <button
+                  onClick={() => { void handleGenerateQuantum(); }}
+                  disabled={isGenerateDisabled}
+                  className={`w-full md:w-auto px-6 sm:px-8 py-3.5 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-2xl font-black text-lg sm:text-xl shadow-[0_0_20px_rgba(147,51,234,0.35)] transition-all transform active:scale-95 flex items-center justify-center gap-2 break-keep ${
+                    isGenerateDisabled ? 'cursor-not-allowed opacity-60' : 'hover:scale-[1.02] hover:from-purple-500 hover:to-indigo-500'
+                  }`}
+                >
+                  {isEngineBusy ? (
+                    <><span className="animate-spin">⚙️</span> <span className="whitespace-nowrap">엔진 준비 중</span></>
+                  ) : isGeneratingQuantum ? (
+                    <><span className="animate-spin">🎲</span> <span className="whitespace-nowrap">조합 생성 중</span></>
+                  ) : (
+                    <><span>추천 받기</span></>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
 
           {generationStatus && !isGeneratingQuantum && (
-            <div className="w-full md:w-2/3 mb-6 rounded-xl border border-amber-700/50 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
+            <div className="mt-6 rounded-xl border border-amber-700/50 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
               {generationStatus}
             </div>
           )}
 
           {quantumPredictions.length > 0 && (
-            <div className="w-full grid grid-cols-1 xl:grid-cols-2 gap-4 animate-fade-in">
+            <div className="mt-6 grid w-full grid-cols-1 gap-4 animate-fade-in xl:grid-cols-2">
               {quantumPredictions.map((prediction, index) => {
                 const fixedInCombo = fixedNumbers.filter(n => prediction.numbers.includes(n));
                 return (
                   <div key={prediction.numbers.join('-')} className="bg-gray-900/80 rounded-2xl p-6 border border-purple-900/50 shadow-inner">
                     <div className="flex items-center justify-between mb-4">
-                      <div className="text-sm text-purple-300 font-bold">양자 조합 #{index + 1}</div>
+                      <div>
+                        <div className="text-sm font-bold text-purple-300">추천 조합 #{index + 1}</div>
+                        <div className="mt-1 text-xs text-gray-500">번호를 클릭하면 개별 분석을 확인할 수 있습니다.</div>
+                      </div>
                       {fixedInCombo.length > 0 && (
                         <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-900/60 text-amber-300 border border-amber-700">
                           고정 {fixedInCombo.join(', ')} 포함
