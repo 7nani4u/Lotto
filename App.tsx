@@ -883,12 +883,12 @@ const App: React.FC = () => {
           </div>
 
           {/* 페이지 탭 */}
-          <div className="flex justify-center gap-2 mt-5">
+          <div className="flex justify-center gap-1.5 sm:gap-2 mt-5">
             {[0, 1, 2].map(p => (
               <button
                 key={p}
                 onClick={() => setFreqPage(p)}
-                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-colors ${freqPage === p ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
+                className={`px-2 sm:px-4 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold transition-colors whitespace-nowrap flex-1 sm:flex-none max-w-[100px] sm:max-w-none ${freqPage === p ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
               >
                 {p * 15 + 1}위 ~ {p * 15 + 15}위
               </button>
