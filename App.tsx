@@ -73,7 +73,6 @@ const App: React.FC = () => {
   const [fixedNumbers, setFixedNumbers] = useState<number[]>([]);
   const [fixedInput, setFixedInput] = useState('');
   const [indicatorTable, setIndicatorTable] = useState<FullIndicatorAnalysis[]>([]);
-  const [showFullTable, setShowFullTable] = useState(false);
 
   useEffect(() => {
     try {
@@ -607,217 +606,6 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* ── 기술 지표 종합 분석 — 출현 가능성 점수 ── */}
-        {indicatorTable.length > 0 && (() => {
-          const top6 = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6);
-          const sorted45 = [...indicatorTable].sort((a, b) => a.rank - b.rank);
-          return (
-            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-teal-900/50 mt-8">
-              <h2 className="text-xl sm:text-2xl font-bold text-teal-300 text-center border-b border-gray-700 pb-4 mb-6 flex items-center justify-center gap-2 break-keep">
-                <span>📊</span> 기술 지표 종합 분석
-                <span className="text-gray-500 font-normal text-sm hidden sm:inline">— 출현 가능성 점수 (1~45번 전체)</span>
-              </h2>
-
-              {/* ── 방법론 3단계 ── */}
-              <div className="bg-gray-900/70 rounded-xl border border-gray-700/60 p-4 mb-5">
-                <div className="text-xs font-bold text-teal-400 mb-3 flex items-center gap-2"><span>📐</span> 분석 방법론 — 3단계 로직</div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {[
-                    { step: '1단계', title: '원시값 계산', desc: 'MA · RSI · 볼린저밴드 · Aroon · Z-Score 5종 지표를 번호별로 독립 계산' },
-                    { step: '2단계', title: '0~100 정규화', desc: '"과소출현 = 높은 점수" 방향으로 각 지표를 0~100 범위에 정규화' },
-                    { step: '3단계', title: '가중 합산', desc: 'Z(30%) + BB(25%) + RSI(20%) + MA(15%) + Aroon(10%) 비율로 종합 점수 산출' },
-                  ].map(s => (
-                    <div key={s.step} className="bg-gray-800 rounded-lg p-3 border border-gray-700/50">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-teal-900/60 text-teal-300">{s.step}</span>
-                        <span className="text-xs font-bold text-cyan-300">{s.title}</span>
-                      </div>
-                      <p className="text-[11px] text-gray-400 leading-relaxed">{s.desc}</p>
-                    </div>
-                  ))}
-                </div>
-                {/* 가중치 배지 */}
-                <div className="flex flex-wrap gap-2 mt-3">
-                  {[
-                    { name: 'Z-Score', pct: 30, color: 'bg-indigo-500' },
-                    { name: '볼린저밴드', pct: 25, color: 'bg-cyan-500' },
-                    { name: 'RSI', pct: 20, color: 'bg-yellow-500' },
-                    { name: 'MA', pct: 15, color: 'bg-green-500' },
-                    { name: 'Aroon', pct: 10, color: 'bg-orange-500' },
-                  ].map(w => (
-                    <div key={w.name} className="flex items-center gap-1.5 bg-gray-900 rounded-full px-3 py-1 text-xs border border-gray-700">
-                      <div className={`w-2 h-2 rounded-full flex-shrink-0 ${w.color}`} />
-                      <span className="text-gray-400">{w.name}</span>
-                      <span className="font-black text-white">{w.pct}%</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* ── Top 6 추천 번호 ── */}
-              <div className="mb-6">
-                <div className="text-sm font-bold text-teal-400 mb-3 flex items-center gap-2">
-                  <span>🏆</span> 출현 가능성 점수 상위 추천 번호 6개
-                </div>
-                <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-4">
-                  {top6.map((item, idx) => {
-                    const signals: string[] = [];
-                    if (item.zScore < -0.5)           signals.push('저출현 회귀');
-                    if (item.rsi < 35)                 signals.push('RSI 과소');
-                    if (item.bollingerPctB < 0.3)      signals.push('BB 하단');
-                    if (item.aroonOscillator < -30)    signals.push('장기 공백');
-                    if (item.maSignal < -0.01)         signals.push('MA 냉각');
-                    const borderCls = item.compositeScore >= 65
-                      ? 'border-emerald-700/60 bg-emerald-950/40'
-                      : item.compositeScore >= 50
-                        ? 'border-yellow-700/60 bg-yellow-950/30'
-                        : 'border-gray-700 bg-gray-900/50';
-                    const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400' : item.compositeScore >= 50 ? 'text-yellow-400' : 'text-gray-300';
-                    return (
-                      <div key={item.number}
-                           className={`flex flex-col items-center gap-1.5 rounded-xl border p-3 cursor-pointer hover:scale-105 transition-transform ${borderCls}`}
-                           onClick={() => handleBallClick(item.number)}>
-                        <div className="text-[10px] text-gray-500 font-bold">#{idx + 1}</div>
-                        <Ball num={item.number} small />
-                        <div className={`text-sm font-black ${scoreCls}`}>{item.compositeScore.toFixed(1)}점</div>
-                        <div className="flex flex-col items-center gap-0.5 w-full">
-                          {signals.slice(0, 2).map(s => (
-                            <span key={s} className="text-[9px] px-1 py-0.5 rounded bg-teal-900/50 text-teal-300 border border-teal-800/60 text-center w-full truncate">{s}</span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-              </div>
-
-              {/* ── 전체 번호 분석 테이블 (펼치기/접기) ── */}
-              <div className="border border-gray-700 rounded-xl overflow-hidden">
-                <button
-                  onClick={() => setShowFullTable(v => !v)}
-                  className="w-full flex items-center justify-between px-5 py-3 bg-gray-900 hover:bg-gray-800 transition-colors text-sm font-bold text-teal-400"
-                >
-                  <span className="flex items-center gap-2">
-                    <span>📋</span> 전체 번호 분석 테이블 (1~45번, 순위순)
-                  </span>
-                  <span className="text-gray-500">{showFullTable ? '▲ 접기' : '▼ 펼치기'}</span>
-                </button>
-
-                {showFullTable && (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs border-t border-gray-700">
-                      <thead>
-                        <tr className="bg-gray-900/80 border-b border-gray-700">
-                          <th className="py-2.5 px-2 text-gray-400 font-bold text-center whitespace-nowrap">순위</th>
-                          <th className="py-2.5 px-2 text-gray-400 font-bold text-center">번호</th>
-                          <th className="py-2.5 px-2 text-center whitespace-nowrap">
-                            <div className="text-indigo-400 font-bold">Z-Score</div>
-                            <div className="text-gray-600 font-normal">30%</div>
-                          </th>
-                          <th className="py-2.5 px-2 text-center whitespace-nowrap">
-                            <div className="text-cyan-400 font-bold">볼린저%B</div>
-                            <div className="text-gray-600 font-normal">25%</div>
-                          </th>
-                          <th className="py-2.5 px-2 text-center whitespace-nowrap">
-                            <div className="text-yellow-400 font-bold">RSI</div>
-                            <div className="text-gray-600 font-normal">20%</div>
-                          </th>
-                          <th className="py-2.5 px-2 text-center whitespace-nowrap">
-                            <div className="text-green-400 font-bold">MA</div>
-                            <div className="text-gray-600 font-normal">15%</div>
-                          </th>
-                          <th className="py-2.5 px-2 text-center whitespace-nowrap">
-                            <div className="text-orange-400 font-bold">Aroon</div>
-                            <div className="text-gray-600 font-normal">10%</div>
-                          </th>
-                          <th className="py-2.5 px-3 text-center whitespace-nowrap">
-                            <div className="text-teal-400 font-bold">종합 점수</div>
-                            <div className="text-gray-600 font-normal">0~100</div>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sorted45.map(item => {
-                          const rowBg = item.rank <= 6 ? 'bg-teal-950/25' : '';
-                          const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400' : item.compositeScore >= 50 ? 'text-yellow-400' : item.compositeScore >= 35 ? 'text-gray-300' : 'text-blue-400';
-                          const barCls   = item.compositeScore >= 65 ? 'bg-emerald-500' : item.compositeScore >= 50 ? 'bg-yellow-500' : item.compositeScore >= 35 ? 'bg-gray-500' : 'bg-blue-500';
-                          return (
-                            <tr key={item.number} className={`border-b border-gray-800/60 hover:bg-gray-700/20 transition-colors ${rowBg}`}>
-                              <td className="py-2 px-2 text-center">
-                                <span className={`font-black ${item.rank <= 3 ? 'text-yellow-400' : item.rank <= 6 ? 'text-teal-400' : 'text-gray-500'}`}>
-                                  {item.rank}
-                                </span>
-                              </td>
-                              <td className="py-2 px-2 text-center">
-                                <div className="flex justify-center cursor-pointer" onClick={() => handleBallClick(item.number)}>
-                                  <Ball num={item.number} small />
-                                </div>
-                              </td>
-                              {/* Z-Score */}
-                              <td className="py-2 px-2 text-center">
-                                <div className={`font-bold ${item.zScore < -0.5 ? 'text-blue-400' : item.zScore > 0.5 ? 'text-red-400' : 'text-gray-400'}`}>
-                                  {item.zScore > 0 ? '+' : ''}{item.zScore.toFixed(2)}
-                                </div>
-                                <div className="text-gray-600 text-[10px]">{item.zSubScore.toFixed(0)}점</div>
-                              </td>
-                              {/* 볼린저 %B */}
-                              <td className="py-2 px-2 text-center">
-                                <div className={`font-bold ${item.bollingerPctB < 0.15 ? 'text-blue-400' : item.bollingerPctB > 0.85 ? 'text-red-400' : 'text-gray-400'}`}>
-                                  {item.bollingerPctB.toFixed(2)}
-                                </div>
-                                <div className="text-gray-600 text-[10px]">{item.bbSubScore.toFixed(0)}점</div>
-                              </td>
-                              {/* RSI */}
-                              <td className="py-2 px-2 text-center">
-                                <div className={`font-bold ${item.rsi < 30 ? 'text-blue-400' : item.rsi > 70 ? 'text-red-400' : 'text-gray-400'}`}>
-                                  {item.rsi.toFixed(0)}
-                                </div>
-                                <div className="text-gray-600 text-[10px]">{item.rsiSubScore.toFixed(0)}점</div>
-                              </td>
-                              {/* MA */}
-                              <td className="py-2 px-2 text-center">
-                                <div className={`font-bold ${item.maSignal < -0.01 ? 'text-blue-400' : item.maSignal > 0.01 ? 'text-red-400' : 'text-gray-400'}`}>
-                                  {item.maSignal > 0 ? '+' : ''}{item.maSignal.toFixed(3)}
-                                </div>
-                                <div className="text-gray-600 text-[10px]">{item.maSubScore.toFixed(0)}점</div>
-                              </td>
-                              {/* Aroon */}
-                              <td className="py-2 px-2 text-center">
-                                <div className={`font-bold ${item.aroonOscillator < -50 ? 'text-blue-400' : item.aroonOscillator > 50 ? 'text-orange-400' : 'text-gray-400'}`}>
-                                  {item.aroonOscillator > 0 ? '+' : ''}{item.aroonOscillator.toFixed(0)}
-                                </div>
-                                <div className="text-gray-600 text-[10px]">{item.aroonSubScore.toFixed(0)}점</div>
-                              </td>
-                              {/* 종합 점수 */}
-                              <td className="py-2 px-3 text-center">
-                                <div className={`text-sm font-black ${scoreCls}`}>{item.compositeScore.toFixed(1)}</div>
-                                <div className="w-full h-1 bg-gray-700 rounded-full mt-1 overflow-hidden">
-                                  <div className={`h-full rounded-full ${barCls}`} style={{ width: `${item.compositeScore}%` }} />
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              {/* ── 면책 조항 ── */}
-              <div className="mt-5 bg-amber-950/25 border border-amber-800/40 rounded-xl p-4">
-                <div className="text-xs font-bold text-amber-300 mb-2">⚠️ 중요 고지 — 통계적 패턴 참고 자료</div>
-                <p className="text-xs text-amber-200 leading-relaxed break-keep">
-                  본 분석은 과거 당첨 번호 데이터를 기반으로 각 번호의 "상대적 출현 경향성"을 통계적으로 해석한 것입니다.
-                  로또는 매 회차 <strong className="text-amber-100">완전히 독립적인 균일 확률 추첨</strong>으로 운영되며,
-                  어떤 번호도 수학적으로 더 높은 실제 당첨 확률을 가지지 않습니다.
-                  이 점수는 <strong className="text-amber-100">패턴 분석 참고 지표</strong>이며, 당첨을 보장하거나 예측하지 않습니다.
-                </p>
-              </div>
-            </div>
-          );
-        })()}
 
         {/* ── 출현 빈도 순위 (전체 1~45, 15개씩 3페이지) ── */}
         <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700 mt-8">
@@ -1356,11 +1144,12 @@ const App: React.FC = () => {
                 })()}
               </div>{/* end grid */}
 
-              {/* ── 전체 번호 출현 가능성 점수 테이블 ── */}
-              {indicatorTable.length > 0 && (() => {
-                const sorted = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore);
-                const getPattern = (item: FullIndicatorAnalysis) => {
-                  const { maSignal, rsi } = item;
+              {/* ── 선택 번호 출현 가능성 점수 ── */}
+              {indicatorTable.length > 0 && selectedAnalysisNum !== null && (() => {
+                const item = indicatorTable.find(d => d.number === selectedAnalysisNum);
+                if (!item) return null;
+                const { maSignal, rsi } = item;
+                const patObj = (() => {
                   if (rsi > 65 && maSignal > 0.015)
                     return { label: '상승', cls: 'text-red-400 bg-red-900/40 border border-red-800/60' };
                   if (rsi < 35 && maSignal < -0.015)
@@ -1368,97 +1157,48 @@ const App: React.FC = () => {
                   if (Math.abs(maSignal) <= 0.012 && rsi >= 38 && rsi <= 62)
                     return { label: '유지', cls: 'text-gray-400 bg-gray-700/40 border border-gray-600/50' };
                   return { label: '변동', cls: 'text-yellow-400 bg-yellow-900/30 border border-yellow-800/60' };
-                };
-                const getFeature = (item: FullIndicatorAnalysis) => {
-                  const f: string[] = [];
-                  if (item.zScore < -1.0)             f.push('장기 저출현');
-                  else if (item.zScore > 1.0)          f.push('장기 과출현');
-                  if (item.rsi < 30)                   f.push('RSI 과소');
-                  else if (item.rsi > 70)              f.push('RSI 과다');
-                  if (item.bollingerPctB < 0.15)       f.push('BB 하단');
-                  else if (item.bollingerPctB > 0.85)  f.push('BB 상단');
-                  if (item.aroonOscillator < -60)      f.push('장기 공백');
-                  else if (item.aroonOscillator > 60)  f.push('단기 활성');
-                  return f.length > 0 ? f.join(' · ') : '평균 범위 내';
-                };
+                })();
+                const featArr: string[] = [];
+                if (item.zScore < -1.0)            featArr.push('장기 저출현');
+                else if (item.zScore > 1.0)         featArr.push('장기 과출현');
+                if (item.rsi < 30)                  featArr.push('RSI 과소');
+                else if (item.rsi > 70)             featArr.push('RSI 과다');
+                if (item.bollingerPctB < 0.15)      featArr.push('BB 하단');
+                else if (item.bollingerPctB > 0.85) featArr.push('BB 상단');
+                if (item.aroonOscillator < -60)     featArr.push('장기 공백');
+                else if (item.aroonOscillator > 60) featArr.push('단기 활성');
+                const feat = featArr.length > 0 ? featArr.join(' · ') : '평균 범위 내';
+                const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400'
+                  : item.compositeScore >= 50 ? 'text-yellow-400'
+                  : item.compositeScore >= 35 ? 'text-gray-300' : 'text-blue-400';
+                const barCls = item.compositeScore >= 65 ? 'bg-emerald-500'
+                  : item.compositeScore >= 50 ? 'bg-yellow-500'
+                  : item.compositeScore >= 35 ? 'bg-gray-500' : 'bg-blue-500';
                 return (
-                  <div className="mt-4">
-                    <div className="text-xs font-bold text-cyan-400 mb-2 flex items-center gap-2">
-                      <span>📋</span> 전체 번호 출현 가능성 점수 (1~45번 · 점수 내림차순)
+                  <div className="mt-4 grid grid-cols-3 gap-3">
+                    {/* 출현 가능성 점수 */}
+                    <div className="bg-gray-800/70 rounded-xl p-4 border border-gray-700/60 flex flex-col items-center justify-center gap-2">
+                      <div className="text-xs text-gray-500 font-bold">출현 가능성 점수</div>
+                      <div className={`text-2xl font-black ${scoreCls}`}>{item.compositeScore.toFixed(1)}</div>
+                      <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${barCls}`} style={{ width: `${item.compositeScore}%` }} />
+                      </div>
+                      <div className="text-[10px] text-gray-600">0 ~ 100점</div>
                     </div>
-                    <div className="overflow-x-auto rounded-xl border border-gray-700">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="bg-gray-900 border-b border-gray-700">
-                            <th className="py-2 px-2 text-gray-500 font-bold text-center">순위</th>
-                            <th className="py-2 px-2 text-gray-500 font-bold text-center">번호</th>
-                            <th className="py-2 px-3 text-teal-400 font-bold text-center">출현 가능성<br/><span className="text-gray-600 font-normal text-[10px]">점수(0~100)</span></th>
-                            <th className="py-2 px-2 text-gray-500 font-bold text-center">패턴</th>
-                            <th className="py-2 px-3 text-gray-500 font-bold text-left">특징 요약</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {sorted.map(item => {
-                            const isCurrent = item.number === selectedAnalysisNum;
-                            const pat = getPattern(item);
-                            const feat = getFeature(item);
-                            const rowCls = isCurrent
-                              ? 'bg-cyan-950/50 border-l-2 border-cyan-500'
-                              : item.rank <= 6 ? 'bg-teal-950/20' : '';
-                            const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400'
-                              : item.compositeScore >= 50 ? 'text-yellow-400'
-                              : item.compositeScore >= 35 ? 'text-gray-300' : 'text-blue-400';
-                            const barCls = item.compositeScore >= 65 ? 'bg-emerald-500'
-                              : item.compositeScore >= 50 ? 'bg-yellow-500'
-                              : item.compositeScore >= 35 ? 'bg-gray-500' : 'bg-blue-500';
-                            return (
-                              <tr key={item.number}
-                                  className={`border-b border-gray-800/60 hover:bg-gray-700/20 transition-colors ${rowCls}`}>
-                                <td className="py-1.5 px-2 text-center">
-                                  <span className={`font-black ${item.rank <= 3 ? 'text-yellow-400' : item.rank <= 6 ? 'text-teal-400' : 'text-gray-600'}`}>
-                                    {item.rank}
-                                  </span>
-                                </td>
-                                <td className="py-1.5 px-2 text-center">
-                                  <div className="flex justify-center cursor-pointer"
-                                       onClick={() => handleBallClick(item.number)}>
-                                    <Ball num={item.number} small />
-                                  </div>
-                                </td>
-                                <td className="py-1.5 px-3 text-center">
-                                  <div className={`font-black text-sm ${scoreCls}`}>
-                                    {item.compositeScore.toFixed(1)}
-                                  </div>
-                                  <div className="w-full h-1 bg-gray-700 rounded-full mt-0.5 overflow-hidden">
-                                    <div className={`h-full rounded-full ${barCls}`}
-                                         style={{ width: `${item.compositeScore}%` }} />
-                                  </div>
-                                </td>
-                                <td className="py-1.5 px-2 text-center">
-                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${pat.cls}`}>
-                                    {pat.label}
-                                  </span>
-                                </td>
-                                <td className="py-1.5 px-3">
-                                  <span className="text-gray-400 text-[11px]">{feat}</span>
-                                  {isCurrent && (
-                                    <span className="ml-1.5 text-[10px] font-black text-cyan-400">◀ 현재 선택</span>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                    {/* 패턴 */}
+                    <div className="bg-gray-800/70 rounded-xl p-4 border border-gray-700/60 flex flex-col items-center justify-center gap-2">
+                      <div className="text-xs text-gray-500 font-bold">패턴</div>
+                      <span className={`text-base font-black px-3 py-1 rounded ${patObj.cls}`}>{patObj.label}</span>
+                    </div>
+                    {/* 특징 요약 */}
+                    <div className="bg-gray-800/70 rounded-xl p-4 border border-gray-700/60 flex flex-col items-center justify-center gap-2">
+                      <div className="text-xs text-gray-500 font-bold">특징 요약</div>
+                      <div className="text-xs text-gray-300 text-center leading-relaxed">{feat}</div>
                     </div>
                   </div>
                 );
               })()}
 
-              <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500 leading-relaxed">
-                ⚠️ 기술 지표는 <strong className="text-gray-400">통계적 패턴 참고 지표</strong>이며 당첨 확률을 높이지 않습니다.
-                복권은 매 회차 독립 추첨으로, 과거 패턴이 미래를 보장하지 않습니다.
-              </div>
             </div>
 
             {/* Z-Score 지표 */}
