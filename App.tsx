@@ -671,7 +671,7 @@ const App: React.FC = () => {
 
         {/* 내부 분석/최적화는 자동 실행되며 화면에는 표시하지 않음 */}
 
-        {/* ══ [1] 출현 가능성 점수 상위 추천 번호 6개 + 전체 테이블 ══ */}
+        {/* ══ [1] 출현가능성 상위 6개 번호 + 전체 테이블 ══ */}
         {indicatorTable.length > 0 && (() => {
           const top6 = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6);
           const sorted45 = [...indicatorTable].sort((a, b) => a.rank - b.rank);
@@ -697,7 +697,7 @@ const App: React.FC = () => {
           return (
             <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-teal-900/50 mt-8">
               <h2 className="text-lg font-bold text-teal-300 border-b border-gray-700 pb-3 mb-5 flex items-center gap-2">
-                <span>🏆</span> 출현 가능성 점수 상위 추천 번호 6개
+                <span>🏆</span> 출현가능성 상위 6개 번호
               </h2>
 
               {/* Top 6 카드 */}
