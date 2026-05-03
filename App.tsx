@@ -417,36 +417,7 @@ const App: React.FC = () => {
             피타고라스·피보나치/황금비(φ)·가우스 정규분포·Pareto 80/20·Whitson 패턴법칙·양자 요동 노이즈·<strong className="text-purple-300">Z-Score 통계보정</strong>·<strong className="text-purple-300">동반출현 시너지</strong>·<strong className="text-blue-300">MA 빈도추세</strong>·<strong className="text-blue-300">RSI 빈도모멘텀</strong>·<strong className="text-blue-300">볼린저밴드 편차</strong>·<strong className="text-blue-300">Aroon 갭재귀</strong>의 <strong className="text-purple-300">12종 수학/통계 기법</strong>을 W(n)=G×P×F×φ×Py×Q×Z×C×T 공식으로 통합한 뒤, Python 6종 고급 필터를 통과한 확률 최적화 조합만 추출합니다.
           </p>
 
-          <div className="w-full flex flex-col md:flex-row items-center justify-center gap-4 mb-8">
-            <div className="flex items-center gap-3 bg-gray-900 border border-gray-700 rounded-xl px-4 py-3">
-              <span className="text-sm text-gray-400">출력 조합 수</span>
-              <select
-                value={combinationCount}
-                onChange={(e) => setCombinationCount(Number(e.target.value))}
-                className="bg-gray-800 text-white rounded-lg px-3 py-2 border border-gray-600 outline-none"
-              >
-                {Array.from({ length: 20 }, (_, i) => i + 1).map((count) => (
-                  <option key={count} value={count}>
-                    {count}개
-                  </option>
-                ))}
-              </select>
-            </div>
-            {quantumPredictions.length > 0 && !isGeneratingQuantum && (
-              <button
-                onClick={() => { void handleCopyPredictions(); }}
-                className={`flex items-center justify-center gap-2 px-5 py-3 rounded-xl font-bold text-sm transition-all duration-300 w-full md:w-auto ${
-                  copySuccess
-                    ? 'bg-green-600 text-white shadow-[0_0_15px_rgba(34,197,94,0.4)]'
-                    : 'bg-gray-800 text-gray-300 border border-gray-600 hover:bg-gray-700 hover:text-white'
-                }`}
-              >
-                {copySuccess ? '✅ 복사 완료!' : '📋 클립보드 복사'}
-              </button>
-            )}
-          </div>
-
-          {/* ── 고정 번호 설정 ── */}
+          {/* ── 컨트롤 바 (조합 수 · 고정 번호 · 복사) ── */}
           {(() => {
             const addFixed = () => {
               const n = parseInt(fixedInput, 10);
@@ -456,53 +427,87 @@ const App: React.FC = () => {
               setFixedInput('');
             };
             return (
-              <div className="w-full md:w-2/3 mb-6 bg-gray-900/60 border border-purple-900/40 rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-bold text-purple-300">고정 번호 설정</span>
-                  <span className="text-[11px] text-gray-500">추출 시 모든 조합에 반드시 포함 · 최대 5개</span>
-                </div>
+              <div className="w-full md:w-2/3 mb-6 bg-gray-900/70 border border-purple-900/40 rounded-2xl p-4 space-y-3">
+                {/* 1행: 조합 수 + 고정 번호 입력 + 복사 버튼 */}
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* 조합 수 */}
+                  <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2">
+                    <span className="text-xs text-gray-400 whitespace-nowrap">조합 수</span>
+                    <select
+                      value={combinationCount}
+                      onChange={(e) => setCombinationCount(Number(e.target.value))}
+                      className="bg-gray-700 text-white text-sm rounded-lg px-2 py-1 border border-gray-600 outline-none"
+                    >
+                      {Array.from({ length: 20 }, (_, i) => i + 1).map((count) => (
+                        <option key={count} value={count}>{count}개</option>
+                      ))}
+                    </select>
+                  </div>
 
-                {/* 선택된 번호 칩 */}
-                <div className="flex flex-wrap items-center gap-2 my-3 min-h-[36px]">
-                  {fixedNumbers.length === 0
-                    ? <span className="text-xs text-gray-600">없음 — 모든 번호를 알고리즘이 자동 선택합니다</span>
-                    : fixedNumbers.map(n => {
-                        const chipCls = n <= 10 ? 'bg-yellow-600' : n <= 20 ? 'bg-blue-600' : n <= 30 ? 'bg-red-600' : n <= 40 ? 'bg-gray-500' : 'bg-green-600';
-                        return (
-                          <span key={n} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full ${chipCls} text-white text-sm font-black`}>
-                            {n}
-                            <button
-                              onClick={() => setFixedNumbers(prev => prev.filter(x => x !== n))}
-                              className="text-white/70 hover:text-white leading-none ml-0.5"
-                            >×</button>
-                          </span>
-                        );
-                      })
-                  }
-                </div>
+                  {/* 구분선 */}
+                  <div className="hidden sm:block w-px h-8 bg-gray-700" />
 
-                {/* 번호 입력 */}
-                <div className="flex items-center gap-2">
+                  {/* 고정 번호 레이블 */}
+                  <span className="text-xs text-purple-400 font-bold whitespace-nowrap">고정 번호</span>
+
+                  {/* 번호 입력 */}
                   <input
                     type="number"
                     min={1} max={45}
                     value={fixedInput}
                     onChange={e => setFixedInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') addFixed(); }}
-                    placeholder="1 ~ 45"
+                    placeholder="1~45"
                     disabled={fixedNumbers.length >= 5}
-                    className="w-24 bg-gray-800 text-white text-sm rounded-lg px-3 py-2 border border-gray-600 outline-none disabled:opacity-40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    className="w-16 bg-gray-800 text-white text-sm rounded-lg px-2 py-2 border border-gray-600 outline-none disabled:opacity-40 text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
                   <button
                     onClick={addFixed}
                     disabled={fixedNumbers.length >= 5 || fixedInput === ''}
-                    className="px-4 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-sm font-bold transition-colors disabled:opacity-40"
+                    className="px-3 py-2 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold transition-colors disabled:opacity-40"
                   >추가</button>
                   {fixedNumbers.length > 0 && (
                     <button
                       onClick={() => setFixedNumbers([])}
-                      className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm transition-colors"
+                      className="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-400 text-xs transition-colors"
                     >초기화</button>
+                  )}
+
+                  {/* 복사 버튼 (결과 있을 때만) */}
+                  {quantumPredictions.length > 0 && !isGeneratingQuantum && (
+                    <>
+                      <div className="hidden sm:block w-px h-8 bg-gray-700" />
+                      <button
+                        onClick={() => { void handleCopyPredictions(); }}
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-xs transition-all duration-300 ${
+                          copySuccess
+                            ? 'bg-green-600 text-white'
+                            : 'bg-gray-700 text-gray-300 border border-gray-600 hover:bg-gray-600'
+                        }`}
+                      >
+                        {copySuccess ? '✅ 복사 완료' : '📋 복사'}
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* 2행: 선택된 고정 번호 칩 */}
+                <div className="flex flex-wrap items-center gap-1.5 min-h-[28px]">
+                  {fixedNumbers.length === 0 ? (
+                    <span className="text-[11px] text-gray-600">고정 번호 없음 — 최대 5개 설정 가능</span>
+                  ) : (
+                    fixedNumbers.map(n => {
+                      const chipCls = n <= 10 ? 'bg-yellow-600' : n <= 20 ? 'bg-blue-600' : n <= 30 ? 'bg-red-600' : n <= 40 ? 'bg-gray-500' : 'bg-green-600';
+                      return (
+                        <span key={n} className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full ${chipCls} text-white text-xs font-black`}>
+                          {n}
+                          <button
+                            onClick={() => setFixedNumbers(prev => prev.filter(x => x !== n))}
+                            className="text-white/70 hover:text-white leading-none"
+                          >×</button>
+                        </span>
+                      );
+                    })
                   )}
                 </div>
               </div>
