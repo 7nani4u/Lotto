@@ -430,7 +430,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-900 text-white font-sans p-4 md:p-8">
-      <div className="max-w-4xl mx-auto space-y-8">
+      <div className="max-w-5xl mx-auto space-y-8">
         <div className="text-center space-y-2">
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 break-keep">
             한국 로또 6/45 AI 마스터
@@ -446,40 +446,43 @@ const App: React.FC = () => {
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                 <span>{isEngineBusy ? '준비 중' : '사용 가능'}</span>
               </div>
-              <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div className="mt-4">
                 <div>
-                  <h2 className="text-2xl sm:text-3xl font-extrabold text-white break-keep">
+                  <h2 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white break-keep">
                     보기 편하고 바로 쓸 수 있는 번호 추천
                   </h2>
-                  <p className="mt-3 max-w-2xl text-sm sm:text-base leading-6 text-gray-300 break-keep">
+                  <p className="mt-3 max-w-3xl text-sm sm:text-base leading-6 text-gray-300 break-keep">
                     조합 수를 선택하고 필요하면 고정 번호를 넣은 뒤 추천을 실행하세요. 복잡한 계산 과정은 내부에서 자동 처리하고, 화면에는 핵심 입력과 결과만 깔끔하게 보여줍니다.
                   </p>
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-left text-xs sm:text-sm">
-                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-3">
-                    <div className="text-gray-500">추천 조합</div>
-                    <div className="mt-1 text-lg font-black text-white">{combinationCount}개</div>
+                <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-4 text-left">
+                    <div className="text-xs font-semibold text-gray-500">추천 조합</div>
+                    <div className="mt-2 text-2xl font-black text-white">{combinationCount}개</div>
+                    <div className="mt-1 text-xs text-gray-500">한 번에 생성할 조합 수</div>
                   </div>
-                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-3">
-                    <div className="text-gray-500">고정 번호</div>
-                    <div className="mt-1 text-lg font-black text-purple-300">{fixedNumbers.length}개</div>
+                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-4 text-left">
+                    <div className="text-xs font-semibold text-gray-500">고정 번호</div>
+                    <div className="mt-2 text-2xl font-black text-purple-300">{fixedNumbers.length}개</div>
+                    <div className="mt-1 text-xs text-gray-500">선택한 번호 개수</div>
                   </div>
-                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-3">
-                    <div className="text-gray-500">복사 가능</div>
-                    <div className="mt-1 text-lg font-black text-emerald-300">{hasPredictionResults ? '예' : '대기'}</div>
+                  <div className="rounded-2xl border border-gray-700 bg-gray-900/70 px-4 py-4 text-left">
+                    <div className="text-xs font-semibold text-gray-500">복사 가능</div>
+                    <div className="mt-2 text-2xl font-black text-emerald-300">{hasPredictionResults ? '예' : '대기'}</div>
+                    <div className="mt-1 text-xs text-gray-500">추천 결과 생성 후 활성화</div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_1.4fr] gap-4">
-              <div className="rounded-2xl border border-gray-700 bg-gray-900/70 p-5">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.35fr)]">
+              <div className="rounded-2xl border border-gray-700 bg-gray-900/70 p-5 sm:p-6">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-bold text-white">1. 추천 개수 선택</div>
-                    <div className="mt-1 text-xs leading-5 text-gray-400">한 번에 받을 조합 수를 정합니다.</div>
+                    <div className="text-base font-bold text-white">1. 추천 개수 선택</div>
+                    <div className="mt-1 text-sm leading-6 text-gray-400">한 번에 받을 조합 수를 정합니다.</div>
                   </div>
-                  <div className="rounded-full bg-blue-950/60 px-2.5 py-1 text-[11px] font-bold text-blue-300">
+                  <div className="shrink-0 whitespace-nowrap rounded-full bg-blue-950/60 px-2.5 py-1 text-[11px] font-bold text-blue-300">
                     1~20개
                   </div>
                 </div>
@@ -488,7 +491,7 @@ const App: React.FC = () => {
                   <select
                     value={combinationCount}
                     onChange={(e) => setCombinationCount(Number(e.target.value))}
-                    className="w-full rounded-xl border border-gray-600 bg-gray-800 px-4 py-3 text-base font-semibold text-white outline-none transition-colors focus:border-blue-500"
+                    className="w-full rounded-xl border border-gray-600 bg-gray-800 px-4 py-3.5 text-base font-semibold text-white outline-none transition-colors focus:border-blue-500"
                   >
                     {Array.from({ length: 20 }, (_, i) => i + 1).map((count) => (
                       <option key={count} value={count}>{count}개</option>
@@ -497,21 +500,21 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-purple-900/40 bg-gray-900/70 p-5">
+              <div className="rounded-2xl border border-purple-900/40 bg-gray-900/70 p-5 sm:p-6">
                 <div className="flex flex-col gap-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                     <div>
-                      <div className="text-sm font-bold text-white">2. 고정 번호 설정</div>
-                      <div className="mt-1 text-xs leading-5 text-gray-400">
+                      <div className="text-base font-bold text-white">2. 고정 번호 설정</div>
+                      <div className="mt-1 text-sm leading-6 text-gray-400">
                         꼭 넣고 싶은 번호가 있으면 추가하세요. 최대 {MAX_FIXED_NUMBERS}개까지 설정할 수 있습니다.
                       </div>
                     </div>
-                    <div className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${fixedNumberLimitReached ? 'bg-amber-950/70 text-amber-300' : 'bg-purple-950/60 text-purple-300'}`}>
+                    <div className={`self-start whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold ${fixedNumberLimitReached ? 'bg-amber-950/70 text-amber-300' : 'bg-purple-950/60 text-purple-300'}`}>
                       {fixedNumberLimitReached ? '입력 완료' : `${fixedNumbersRemaining}개 더 추가 가능`}
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto_auto] gap-2">
+                  <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
                     <input
                       type="number"
                       min={1}
@@ -521,27 +524,27 @@ const App: React.FC = () => {
                       onKeyDown={(e) => { if (e.key === 'Enter') handleAddFixedNumber(); }}
                       placeholder="번호 입력 (1~45)"
                       disabled={fixedNumberLimitReached}
-                      className="w-full rounded-xl border border-gray-600 bg-gray-800 px-4 py-3 text-center text-base font-semibold text-white outline-none transition-colors focus:border-purple-500 disabled:cursor-not-allowed disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      className="w-full rounded-xl border border-gray-600 bg-gray-800 px-4 py-3.5 text-center text-base font-semibold text-white outline-none transition-colors focus:border-purple-500 disabled:cursor-not-allowed disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     />
                     <button
                       onClick={handleAddFixedNumber}
                       disabled={!canSubmitFixedNumber}
-                      className="rounded-xl bg-purple-600 px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="rounded-xl bg-purple-600 px-4 py-3.5 text-sm font-bold text-white transition-colors hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-40 md:min-w-[110px]"
                     >
                       번호 추가
                     </button>
                     <button
                       onClick={() => setFixedNumbers([])}
                       disabled={fixedNumbers.length === 0}
-                      className="rounded-xl border border-gray-600 bg-gray-800 px-4 py-3 text-sm font-bold text-gray-300 transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="rounded-xl border border-gray-600 bg-gray-800 px-4 py-3.5 text-sm font-bold text-gray-300 transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40 md:min-w-[110px]"
                     >
                       전체 지우기
                     </button>
                   </div>
 
-                  <div className="rounded-xl border border-dashed border-gray-700 bg-gray-950/40 px-4 py-3">
+                  <div className="rounded-xl border border-dashed border-gray-700 bg-gray-950/40 px-4 py-4">
                     <div className="mb-2 text-xs font-bold text-gray-500">선택한 고정 번호</div>
-                    <div className="flex min-h-[36px] flex-wrap items-center gap-2">
+                    <div className="flex min-h-[44px] flex-wrap items-center gap-2">
                       {fixedNumbers.length === 0 ? (
                         <span className="text-xs text-gray-500">아직 선택한 번호가 없습니다.</span>
                       ) : (
@@ -583,10 +586,10 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            <div className="rounded-2xl border border-indigo-900/40 bg-gradient-to-r from-purple-950/40 to-indigo-950/40 p-4 sm:p-5">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="rounded-2xl border border-indigo-900/40 bg-gradient-to-r from-purple-950/40 to-indigo-950/40 p-5 sm:p-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <div className="text-sm font-bold text-white">3. 추천 실행</div>
+                  <div className="text-base font-bold text-white">3. 추천 실행</div>
                   <div className="mt-1 text-sm text-gray-300 break-keep">
                     선택한 조건을 기준으로 중복 이력을 피한 새 조합을 생성합니다.
                   </div>
