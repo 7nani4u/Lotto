@@ -291,19 +291,19 @@ def compute_hybrid_scores(draws: list[DrawResult]) -> list[ScoredNumber]:
 W = 100
 
 def _level(score: float) -> str:
-    if score >= 75: return "◉ 강력 추천"
-    if score >= 60: return "● 중간 추천"
-    if score >= 50: return "○ 약한 추천"
-    if score >= 40: return "▽ 배제 고려"
-    return               "▼ 강력 배제"
+    if score >= 75: return "◉ 강력 추천 (출현가능성 매우 높음)"
+    if score >= 60: return "● 중간 추천 (출현가능성 높음)"
+    if score >= 50: return "○ 약한 추천 (출현가능성 중간)"
+    if score >= 40: return "▽ 배제 고려 (출현가능성 낮음)"
+    return               "▼ 강력 배제 (출현가능성 매우 낮음)"
 
 def print_hybrid_table(scored: list[ScoredNumber]) -> None:
     print("\n" + "=" * W)
-    print("  [하이브리드 슈퍼 앙상블 분석 테이블] (0~100 정규화 점수)".center(W))
+    print("  📋 전체 데이터 테이블 — 1~45번 출현가능성 점수 전체 (순위순)".center(W))
     print("=" * W)
     
     print(f" {'순위':>2}  {'번호':>2} │ "
-          f"{'전통 통계 지표 (40%)':^25} │ "
+          f"{'📈 기술 지표 분석 (MA/RSI/BB 등 - 평균 회귀 관점)':^44} │ "
           f"{'고급 양자/신경망 (60%)':^25} │ "
           f"{'종합':>5}  {'신호':}")
     print(f"          │   Z   BB  RSI   MA  Ar │  QA   QF   NP  M3D   AC │")
@@ -319,19 +319,19 @@ def print_hybrid_table(scored: list[ScoredNumber]) -> None:
         if rank == 6: print(" " * 10 + "┴" + "─" * 27 + "┴" + "─" * 27 + "┴" + "─" * 15)
 
     print("-" * W)
-    print("  ▶ = 통합 하이브리드 상위 6개 추천 번호")
+    print("  ▶ = 통합 하이브리드 상위 6개 출현가능성 추천 번호")
 
 
 def print_top6_interpretation(scored: list[ScoredNumber]) -> None:
     top6 = scored[:6]
     print("\n" + "=" * W)
-    print("  [🎯 하이브리드 앙상블 추천 번호 6개 — 상세 동인 분석]".center(W))
+    print("  [🎯 출현가능성 상위 6개 번호 — 상세 동인 분석]".center(W))
     print("=" * W)
     print(f"\n  최종 추천 번호: {' — '.join(f'{s.number:02d}' for s in top6)}\n")
 
     for rank, s in enumerate(top6, 1):
         print("─" * (W - 10))
-        print(f"  [{rank}위] 번호 {s.number:02d}번  ·  종합 점수 {s.composite:.1f}/100")
+        print(f"  [{rank}위] 번호 {s.number:02d}번  ·  출현가능성 종합 점수 {s.composite:.1f}/100")
         
         # 핵심 동인 추출 (점수가 70점 이상인 것들)
         drivers = []
@@ -341,6 +341,9 @@ def print_top6_interpretation(scored: list[ScoredNumber]) -> None:
         if s.s_np > 70: drivers.append(f"신경패턴({s.s_np:.0f})")
         if s.s_m3d > 70: drivers.append(f"마르코프3D({s.s_m3d:.0f})")
         if s.s_bb > 70: drivers.append(f"볼린저밴드({s.s_bb:.0f})")
+        if s.s_rsi > 70: drivers.append(f"RSI({s.s_rsi:.0f})")
+        if s.s_ma > 70: drivers.append(f"MA({s.s_ma:.0f})")
+        if s.s_aroon > 70: drivers.append(f"Aroon({s.s_aroon:.0f})")
         
         if drivers:
             print(f"    ▲ 주요 상승 요인: {', '.join(drivers)}")
@@ -348,6 +351,17 @@ def print_top6_interpretation(scored: list[ScoredNumber]) -> None:
             print(f"    ▲ 안정적 밸런스: 모든 지표에서 고르게 상위권 점수를 획득했습니다.")
     print("─" * (W - 10) + "\n")
 
+
+def print_disclaimer() -> None:
+    print("=" * W)
+    print("  ⚠️  [중요 공지 — 반드시 확인하십시오]".center(W))
+    print("=" * W)
+    print("""
+  본 분석 결과는 "통계적 패턴 해석 및 머신러닝 모방 알고리즘"이며, 
+  실제 로또 당첨 확률과 무관합니다. 매 회차 추첨은 완전한 독립 사건입니다.
+  본 분석 결과를 투자 또는 배팅 근거로 사용하지 마십시오.
+    """)
+    print("=" * W)
 
 def main(n_rounds: int = 100, seed: int = 42) -> None:
     print("\n" + "=" * W)
@@ -362,6 +376,7 @@ def main(n_rounds: int = 100, seed: int = 42) -> None:
 
     print_hybrid_table(scored)
     print_top6_interpretation(scored)
+    print_disclaimer()
 
 if __name__ == "__main__":
     main(n_rounds=100, seed=42)
