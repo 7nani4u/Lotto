@@ -722,7 +722,27 @@ const App: React.FC = () => {
                       <div className="text-[10px] text-gray-500 font-bold">#{idx + 1}</div>
                       <Ball num={item.number} small />
                       <div className={`text-sm font-black ${scoreCls}`}>{item.compositeScore.toFixed(1)}점</div>
-                      <div className="flex flex-col items-center gap-0.5 w-full">
+                      {/* 5종 지표 서브점수 미니바 */}
+                      <div className="w-full space-y-[3px] mt-1.5">
+                        {([
+                          ['Z', item.zSubScore],
+                          ['BB', item.bbSubScore],
+                          ['RSI', item.rsiSubScore],
+                          ['MA', item.maSubScore],
+                          ['Ar', item.aroonSubScore],
+                        ] as [string, number][]).map(([lbl, val]) => (
+                          <div key={lbl} className="flex items-center gap-1">
+                            <span className="text-[7px] text-gray-600 w-4 text-right flex-shrink-0 font-bold">{lbl}</span>
+                            <div className="flex-1 h-1 bg-gray-700 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${val >= 65 ? 'bg-emerald-500' : val >= 50 ? 'bg-yellow-500' : 'bg-gray-600'}`}
+                                style={{ width: `${val}%` }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex flex-col items-center gap-0.5 w-full mt-1">
                         {signals.slice(0, 2).map(s => (
                           <span key={s} className="text-[9px] px-1 py-0.5 rounded bg-teal-900/50 text-teal-300 border border-teal-800/60 text-center w-full truncate">{s}</span>
                         ))}
@@ -802,6 +822,182 @@ const App: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ══ [1.5] 📈 기술 지표 분석 패널 ══ */}
+        {indicatorTable.length > 0 && (() => {
+          type SubKey = 'zSubScore' | 'bbSubScore' | 'rsiSubScore' | 'maSubScore' | 'aroonSubScore';
+          const indicators: { key: SubKey; name: string; fullName: string; desc: string; formula: string }[] = [
+            {
+              key: 'zSubScore',
+              name: 'Z-Score',
+              fullName: 'Z-Score 통계 보정',
+              desc: '전체 회차 누적 출현 빈도의 횡단면 표준편차 분석. 과소출현(음수 Z) = 높은 점수.',
+              formula: 'Z(n) = −(freq(n) − μ) / σ   →   점수 = (−Z + 3) / 6 × 100',
+            },
+            {
+              key: 'bbSubScore',
+              name: 'BB',
+              fullName: '볼린저밴드 횡단면 편차 (%B)',
+              desc: '최근 45회 롤링 윈도우. 하단밴드 이탈 = 횡단면 과소출현 신호.',
+              formula: '%B = (freq − LB) / (UB − LB)   →   점수 = (1 − %B) × 100',
+            },
+            {
+              key: 'rsiSubScore',
+              name: 'RSI',
+              fullName: 'RSI 빈도 모멘텀',
+              desc: '최근 26회 출현/미출현 비율. RSI < 30 = 과소출현(과매도 유사).',
+              formula: 'RSI = 100 − 100/(1 + 출현/미출현)   →   점수 = 100 − RSI',
+            },
+            {
+              key: 'maSubScore',
+              name: 'MA',
+              fullName: 'MA 크로스오버 빈도 추세',
+              desc: '단기(10회) vs 장기(30회) 출현율 크로스. 데드크로스 = 최근 감소 추세.',
+              formula: 'Signal = 단기출현율 − 장기출현율   →   점수 = (−Signal + 0.30) / 0.60 × 100',
+            },
+            {
+              key: 'aroonSubScore',
+              name: 'Aroon',
+              fullName: 'Aroon 오실레이터 갭 재귀',
+              desc: '최근 구간 출현 주기성·공백 기간 분석. 음수 오실레이터 = 장기 미출현.',
+              formula: 'Aroon Osc = Aroon Up − Aroon Down   →   점수 = (−Osc + 100) / 2',
+            },
+          ];
+
+          const CONSENSUS_THRESHOLD = 65;
+          const consensusNums = indicatorTable
+            .map(item => {
+              const scores = [item.zSubScore, item.bbSubScore, item.rsiSubScore, item.maSubScore, item.aroonSubScore];
+              const cnt = scores.filter(v => v >= CONSENSUS_THRESHOLD).length;
+              return { item, cnt, scores };
+            })
+            .filter(({ cnt }) => cnt >= 3)
+            .sort((a, b) => b.cnt - a.cnt || b.item.compositeScore - a.item.compositeScore);
+
+          return (
+            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-cyan-900/40 mt-8">
+              <h2 className="text-lg font-bold text-cyan-300 border-b border-gray-700 pb-3 mb-5 flex items-center gap-2 flex-wrap">
+                <span>📈</span>
+                <span>기술 지표 분석</span>
+                <span className="text-gray-500 font-normal text-xs sm:text-sm">— MA · RSI · 볼린저밴드 · Aroon (평균 회귀 관점)</span>
+              </h2>
+
+              {/* 5종 지표 카드 */}
+              <div className="space-y-3">
+                {indicators.map(ind => {
+                  const sorted = [...indicatorTable].sort((a, b) => b[ind.key] - a[ind.key]);
+                  const top5 = sorted.slice(0, 5);
+                  const bot5 = sorted.slice(-5).reverse();
+                  const topScore = sorted[0][ind.key];
+                  const signal = topScore >= 80
+                    ? { text: '🔴 강한 회귀 신호', cls: 'bg-red-900/60 text-red-300 border border-red-800/60' }
+                    : topScore >= 65
+                    ? { text: '🟡 중간 회귀 신호', cls: 'bg-yellow-900/60 text-yellow-300 border border-yellow-800/60' }
+                    : { text: '⚪ 약한 신호', cls: 'bg-gray-700 text-gray-400 border border-gray-600' };
+
+                  return (
+                    <div key={ind.key} className="bg-gray-900/80 rounded-xl border border-gray-700/60 p-4">
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 mb-3">
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-black text-cyan-300 bg-cyan-950/60 border border-cyan-800/60 px-2 py-0.5 rounded">[{ind.name}]</span>
+                            <span className="text-sm font-bold text-white">{ind.fullName}</span>
+                          </div>
+                          <div className="text-[11px] text-gray-400 mt-1 leading-relaxed">{ind.desc}</div>
+                          <div className="text-[10px] text-gray-600 mt-0.5 font-mono">{ind.formula}</div>
+                        </div>
+                        <span className={`self-start whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded ${signal.cls}`}>
+                          {signal.text}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <div className="text-[10px] text-emerald-400 font-bold mb-1.5 flex items-center gap-1">
+                            <span>▲</span> 출현 기대↑ 상위 5개
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {top5.map(item => (
+                              <div
+                                key={item.number}
+                                className="flex items-center gap-1 bg-emerald-950/40 rounded-lg px-2 py-1 border border-emerald-800/40 cursor-pointer hover:border-emerald-500 transition-colors"
+                                onClick={() => handleBallClick(item.number)}
+                              >
+                                <Ball num={item.number} small />
+                                <span className="text-[10px] font-black text-emerald-300">{item[ind.key].toFixed(0)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-gray-500 font-bold mb-1.5 flex items-center gap-1">
+                            <span>▼</span> 출현 기대↓ 하위 5개
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {bot5.map(item => (
+                              <div
+                                key={item.number}
+                                className="flex items-center gap-1 bg-gray-800/60 rounded-lg px-2 py-1 border border-gray-700/40 cursor-pointer hover:border-gray-500 transition-colors"
+                                onClick={() => handleBallClick(item.number)}
+                              >
+                                <Ball num={item.number} small />
+                                <span className="text-[10px] text-gray-500">{item[ind.key].toFixed(0)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 다중 신호 컨센서스 */}
+              <div className="mt-4 bg-gray-900/80 rounded-xl border border-purple-800/40 p-4">
+                <h3 className="text-sm font-bold text-purple-300 mb-1 flex items-center gap-2 flex-wrap">
+                  <span>📡</span>
+                  <span>다중 신호 컨센서스</span>
+                  <span className="text-gray-500 font-normal text-xs">— 전통 지표 3개 이상 동시 회귀 신호 번호</span>
+                </h3>
+                <div className="text-[10px] text-gray-500 mb-3">
+                  기준: 5개 지표(Z · BB · RSI · MA · Aroon) 중 점수 ≥ {CONSENSUS_THRESHOLD}점인 지표가 3개 이상인 번호
+                </div>
+                {consensusNums.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {consensusNums.map(({ item, cnt, scores }) => {
+                      const indLabels = ['Z', 'BB', 'RSI', 'MA', 'Ar'];
+                      const activeLabels = indLabels.filter((_, i) => scores[i] >= CONSENSUS_THRESHOLD);
+                      const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400' : item.compositeScore >= 50 ? 'text-yellow-400' : 'text-gray-300';
+                      return (
+                        <div
+                          key={item.number}
+                          className="flex flex-col items-center gap-1 bg-purple-950/40 rounded-xl border border-purple-800/40 px-3 py-2 cursor-pointer hover:border-purple-500 transition-colors"
+                          onClick={() => handleBallClick(item.number)}
+                        >
+                          <Ball num={item.number} small />
+                          <div className="flex gap-0.5 mt-0.5">
+                            {scores.map((v, i) => (
+                              <div
+                                key={i}
+                                className={`w-2 h-2 rounded-full ${v >= CONSENSUS_THRESHOLD ? 'bg-purple-400' : 'bg-gray-700'}`}
+                                title={indLabels[i]}
+                              />
+                            ))}
+                          </div>
+                          <div className="text-[9px] font-black text-purple-300">{cnt}/5 신호</div>
+                          <div className={`text-[9px] font-bold ${scoreCls}`}>{item.compositeScore.toFixed(1)}점</div>
+                          <div className="text-[8px] text-gray-500 text-center">{activeLabels.join('·')}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-500">※ 전통 지표 3개 이상 동시 회귀 신호 번호가 없습니다.</div>
                 )}
               </div>
             </div>
