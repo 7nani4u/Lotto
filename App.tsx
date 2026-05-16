@@ -197,6 +197,77 @@ const App: React.FC = () => {
     };
   }, [strategyAnalysis, quantumOptResult, quantumApplied]);
 
+  // ── 번호 흐름 분析: 추세·갭·구간·대기 (allData 변경 시 재계산)
+  const flowAnalysis = useMemo(() => {
+    if (allData.length < 10) return null;
+    const draws = allData; // index 0 = 가장 최근
+
+    // 추세 분류 (급락/급등/상승/하락/안정)
+    const exp5 = (5 * 7) / 45;
+    const trends: Record<number, string> = {};
+    for (let n = 1; n <= 45; n++) {
+      const r5  = draws.slice(0, 5).filter(d => d.numbers.includes(n) || d.bonus === n).length / exp5;
+      const rp5 = draws.slice(5, 10).filter(d => d.numbers.includes(n) || d.bonus === n).length / exp5;
+      if      (r5 < 0.4 && rp5 >= 0.8) trends[n] = '급락';
+      else if (r5 > 1.6 && rp5 < 0.5)  trends[n] = '급등';
+      else if (r5 >= 0.8)               trends[n] = '상승';
+      else if (r5 < 0.4)                trends[n] = '하락';
+      else                              trends[n] = '안정';
+    }
+
+    // 갭 분析 (현재 대기, 평균 간격, 초과율, 주기성)
+    const gapInfo: Record<number, { curGap: number; avgGap: number; overdueRatio: number; isPeriodic: boolean }> = {};
+    for (let n = 1; n <= 45; n++) {
+      const indices: number[] = [];
+      draws.forEach((d, i) => { if (d.numbers.includes(n) || d.bonus === n) indices.push(i); });
+      const curGap = indices.length > 0 ? indices[0] : draws.length;
+      if (indices.length < 2) {
+        gapInfo[n] = { curGap, avgGap: +(45 / 7).toFixed(1), overdueRatio: +(curGap / (45 / 7)).toFixed(2), isPeriodic: false };
+        continue;
+      }
+      const gaps = indices.slice(0, indices.length - 1).map((v, i) => indices[i + 1] - v);
+      const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
+      const stdGap = Math.sqrt(gaps.reduce((s, g) => s + (g - avgGap) ** 2, 0) / gaps.length);
+      gapInfo[n] = {
+        curGap,
+        avgGap:       +avgGap.toFixed(1),
+        overdueRatio: +(curGap / avgGap).toFixed(2),
+        isPeriodic:   avgGap > 0 && stdGap / avgGap < 0.5,
+      };
+    }
+
+    // 구간별 흐름 (5구간, 최근5 vs 이전5)
+    const segs = [
+      { label: '1~10',  lo: 1,  hi: 10 },
+      { label: '11~20', lo: 11, hi: 20 },
+      { label: '21~30', lo: 21, hi: 30 },
+      { label: '31~40', lo: 31, hi: 40 },
+      { label: '41~45', lo: 41, hi: 45 },
+    ];
+    const segmentFlow = segs.map(seg => {
+      const cnt = (set: LottoResult[]) =>
+        set.reduce((acc, d) => acc + [...d.numbers, d.bonus].filter(n => n >= seg.lo && n <= seg.hi).length, 0);
+      const r5 = cnt(draws.slice(0, 5));
+      const p5 = cnt(draws.slice(5, 10));
+      const diff = r5 - p5;
+      return { label: seg.label, recent5: r5, prev5: p5, trend: diff > 1 ? '상승' : diff < -1 ? '하락' : '안정' };
+    });
+
+    // 장기 대기 번호 (10회차 이상 미출현, 초과율 내림차순)
+    const longAbsent = Object.entries(gapInfo)
+      .filter(([, g]) => g.curGap >= 10)
+      .sort((a, b) => b[1].overdueRatio - a[1].overdueRatio)
+      .slice(0, 10)
+      .map(([n, g]) => ({ number: Number(n), curGap: g.curGap, overdueRatio: g.overdueRatio, avgGap: g.avgGap }));
+
+    // 최근 복귀 번호 (평균 간격 대비 현재 대기가 매우 짧음)
+    const recentlyBack = Object.entries(gapInfo)
+      .filter(([, g]) => g.avgGap >= 8 && g.curGap < g.avgGap * 0.3)
+      .map(([n]) => Number(n));
+
+    return { trends, gapInfo, segmentFlow, longAbsent, recentlyBack };
+  }, [allData]);
+
   const handleGenerateQuantum = async () => {
     if (allData.length === 0 || isGeneratingQuantum) return;
 
@@ -823,6 +894,156 @@ const App: React.FC = () => {
                     </table>
                   </div>
                 )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ══ [1.5] 🔗 번호 흐름 分析 ══ */}
+        {flowAnalysis && indicatorTable.length > 0 && (() => {
+          const top6 = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6);
+          const { trends, gapInfo, segmentFlow, longAbsent, recentlyBack } = flowAnalysis;
+
+          const trendStyle: Record<string, string> = {
+            '급락': 'text-blue-300 bg-blue-900/50 border border-blue-700/60',
+            '급등': 'text-red-300 bg-red-900/50 border border-red-700/60',
+            '상승': 'text-orange-300 bg-orange-900/40 border border-orange-700/60',
+            '하락': 'text-cyan-300 bg-cyan-900/40 border border-cyan-700/60',
+            '안정': 'text-gray-400 bg-gray-700/50 border border-gray-600/50',
+          };
+          const segStyle: Record<string, { bg: string; text: string; icon: string }> = {
+            '상승': { bg: 'border-orange-700/60 bg-orange-950/30', text: 'text-orange-300', icon: '↑' },
+            '하락': { bg: 'border-cyan-700/60 bg-cyan-950/30',    text: 'text-cyan-300',   icon: '↓' },
+            '안정': { bg: 'border-gray-700 bg-gray-900/60',        text: 'text-gray-400',   icon: '→' },
+          };
+          const trendGroups: Record<string, number[]> = { '급등': [], '상승': [], '안정': [], '하락': [], '급락': [] };
+          for (let n = 1; n <= 45; n++) trendGroups[trends[n]]?.push(n);
+
+          return (
+            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-violet-900/40 mt-8">
+              <h2 className="text-lg font-bold text-violet-300 border-b border-gray-700 pb-3 mb-6 flex items-center gap-2">
+                <span>🔗</span> 번호 흐름 分析
+                <span className="text-xs font-normal text-gray-500 ml-1">최근 10회차 추세 · 구간 흐름 · 대기 현황</span>
+              </h2>
+
+              {/* 1. 구간별 흐름 */}
+              <div className="mb-6">
+                <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
+                  <span>📊</span> 구간별 흐름 — 최근 5회 vs 이전 5회
+                </div>
+                <div className="grid grid-cols-5 gap-2">
+                  {segmentFlow.map(seg => {
+                    const st = segStyle[seg.trend];
+                    return (
+                      <div key={seg.label} className={`rounded-xl border p-3 flex flex-col items-center gap-1.5 ${st.bg}`}>
+                        <div className="text-[11px] font-bold text-gray-400">{seg.label}</div>
+                        <div className={`text-xl font-black ${st.text}`}>{st.icon}</div>
+                        <div className={`text-xs font-bold ${st.text}`}>{seg.trend}</div>
+                        <div className="text-[10px] text-gray-500">{seg.recent5} / {seg.prev5}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 2. 최근 추세 분류 */}
+              <div className="mb-6">
+                <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
+                  <span>📈</span> 최근 추세 분류
+                </div>
+                <div className="space-y-2">
+                  {(['급등', '상승', '안정', '하락', '급락'] as const).map(t => {
+                    const nums = trendGroups[t];
+                    if (!nums || nums.length === 0) return null;
+                    return (
+                      <div key={t} className="flex items-start gap-2 flex-wrap">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex-shrink-0 min-w-[38px] text-center ${trendStyle[t]}`}>{t}</span>
+                        <div className="flex gap-1 flex-wrap">
+                          {nums.map(n => (
+                            <span key={n}
+                              className={`text-[11px] font-bold px-1.5 py-0.5 rounded cursor-pointer hover:scale-110 transition-transform inline-block ${trendStyle[t]}`}
+                              onClick={() => handleBallClick(n)}>
+                              {n}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 3. 장기 대기 번호 */}
+              {longAbsent.length > 0 && (
+                <div className="mb-6">
+                  <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
+                    <span>⏳</span> 장기 대기 번호 — 10회차 이상 미출현 (초과율 높은 순)
+                  </div>
+                  <div className="bg-gray-900/80 rounded-xl border border-gray-700/60 p-4 space-y-2">
+                    {longAbsent.map(item => {
+                      const pct = Math.min(100, ((item.overdueRatio - 1) / 4) * 100);
+                      const barCls  = item.overdueRatio >= 3 ? 'bg-red-500' : item.overdueRatio >= 2 ? 'bg-orange-500' : 'bg-yellow-500';
+                      const textCls = item.overdueRatio >= 3 ? 'text-red-300' : item.overdueRatio >= 2 ? 'text-orange-300' : 'text-yellow-300';
+                      return (
+                        <div key={item.number} className="flex items-center gap-3 cursor-pointer" onClick={() => handleBallClick(item.number)}>
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs flex-shrink-0 bg-gray-700 text-gray-200">
+                            {item.number}
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between mb-0.5">
+                              <span className="text-[10px] text-gray-500">{item.curGap}회 대기 / 평균 {item.avgGap}회</span>
+                              <span className={`text-[11px] font-bold ${textCls}`}>{item.overdueRatio.toFixed(1)}×</span>
+                            </div>
+                            <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                              <div className={`h-full rounded-full ${barCls}`} style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 4. 상위 6개 번호 흐름 근거 */}
+              <div>
+                <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
+                  <span>🏆</span> 상위 6개 번호 흐름 근거
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {top6.map((item, idx) => {
+                    const trend  = trends[item.number] ?? '안정';
+                    const gap    = gapInfo[item.number];
+                    const isBack = recentlyBack.includes(item.number);
+                    const isOverdue = gap && gap.overdueRatio >= 1.2;
+                    const reasons: string[] = [];
+                    if (trend === '급락')      reasons.push('급락 후 반등 기대');
+                    else if (trend === '급등') reasons.push('상승 모멘텀 유지');
+                    else if (trend === '상승') reasons.push('안정적 상승세');
+                    else if (trend === '하락') reasons.push('저활성 → 회귀 가능');
+                    if (isOverdue && gap) reasons.push(`${gap.curGap}회 대기 (${gap.overdueRatio.toFixed(1)}× 초과)`);
+                    if (isBack)              reasons.push('장기 공백 후 복귀');
+                    if (gap?.isPeriodic)     reasons.push('주기적 출현 패턴');
+                    if (reasons.length === 0) reasons.push('지표 종합 우위');
+                    return (
+                      <div key={item.number}
+                           className="bg-gray-900/80 rounded-xl border border-gray-700/60 p-3 flex items-start gap-3 cursor-pointer hover:bg-gray-700/30 transition-colors"
+                           onClick={() => handleBallClick(item.number)}>
+                        <div className="flex flex-col items-center gap-1 flex-shrink-0">
+                          <div className="text-[9px] text-gray-600 font-bold">#{idx + 1}</div>
+                          <Ball num={item.number} small />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trendStyle[trend]}`}>{trend}</span>
+                            {gap && <span className="text-[10px] text-gray-500">{gap.curGap}회 대기</span>}
+                          </div>
+                          <div className="text-[11px] text-gray-400 leading-relaxed">{reasons.join(' · ')}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           );
