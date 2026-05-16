@@ -24,6 +24,7 @@ lotto_technical_indicators.py
 
 from __future__ import annotations
 
+import collections
 import random
 import statistics
 import sys
@@ -939,6 +940,438 @@ def print_disclaimer() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+# §5-6. 번호 흐름 분석 — 연결 구조 기반 (이전·현재·다음 회차 흐름)
+# ════════════════════════════════════════════════════════════════════════════════
+# 2번째 스크린샷 분석 의도 반영:
+#   ① 단순 빈도가 아닌, 회차 간 흐름의 연결성(연결 구조) 중심 분석
+#   ② 최근/중기/장기 추세 구분 (상승·하락·급락·급등·안정)
+#   ③ 출현 간격·주기성으로 "출현 임박" 번호 탐색
+#   ④ 구간별 흐름 변화 (상승·하락 구간 포착)
+#   ⑤ 전이 확률 행렬로 이전→현재→다음 연결 강도 산출
+# ════════════════════════════════════════════════════════════════════════════════
+
+def _flow_trend_all(draws: list[DrawResult]) -> dict[int, dict]:
+    """
+    각 번호의 출현 추세를 단기(최근 5회) vs 직전 5회 비교로 분류합니다.
+    분류: 급락 / 하락 / 급등 / 상승 / 안정
+    급락 = 이전엔 보통이었지만 최근 뚝 떨어짐 → 평균 회귀 기대
+    """
+    exp5 = 5 * 7 / 45  # 5회차 이론 기대 출현 횟수 (보너스 포함)
+    result: dict[int, dict] = {}
+    for n in range(1, 46):
+        f5    = sum(1 for d in draws[:5]  if _appears(d, n))
+        f10   = sum(1 for d in draws[:10] if _appears(d, n))
+        f20   = sum(1 for d in draws[:20] if _appears(d, n))
+        prev5 = f10 - f5
+        r5    = f5    / exp5 if exp5 > 0 else 1.0
+        rp5   = prev5 / exp5 if exp5 > 0 else 1.0
+
+        if   r5 < 0.4 and rp5 >= 0.8: trend = "급락"   # 이전엔 보통 → 최근 급감
+        elif r5 > 1.6 and rp5 < 0.5:  trend = "급등"   # 이전엔 없다가 → 최근 급증
+        elif r5 > 1.4 and rp5 > 1.0:  trend = "상승"   # 전반적 상승
+        elif r5 < 0.4 and rp5 < 0.5:  trend = "하락"   # 전반적 공백
+        else:                          trend = "안정"   # 평균 수준 유지
+
+        result[n] = {
+            "f5": f5, "f10": f10, "f20": f20,
+            "prev5": prev5, "r5": r5, "rp5": rp5,
+            "trend": trend,
+        }
+    return result
+
+
+def _gap_analysis_all(draws: list[DrawResult]) -> dict[int, dict]:
+    """
+    각 번호의 출현 간격 통계를 계산합니다.
+    - cur_gap      : 마지막 출현 이후 경과 회차
+    - avg_gap      : 역사적 평균 출현 간격 (이론값 45/7 ≈ 6.4)
+    - cv           : 변동계수 (std/avg, 낮을수록 주기적)
+    - overdue      : cur_gap / avg_gap 비율 (1.0 초과 = 평균 대기 초과)
+    - periodic     : "강함" / "보통" / "약함"
+    """
+    history = min(80, len(draws))
+    result: dict[int, dict] = {}
+    for n in range(1, 46):
+        idx     = [i for i in range(history) if _appears(draws[i], n)]
+        cur_gap = idx[0] if idx else history
+        # idx 는 오름차순(최근=작은 인덱스, 과거=큰 인덱스) → 간격은 idx[i+1] - idx[i]
+        gaps    = [idx[i + 1] - idx[i] for i in range(len(idx) - 1)]
+        avg_gap = (sum(gaps) / len(gaps)) if gaps else 45.0 / 7.0
+        std_gap = statistics.stdev(gaps) if len(gaps) >= 2 else avg_gap
+        cv      = std_gap / avg_gap if avg_gap > 0 else 1.0
+        overdue = cur_gap / avg_gap if avg_gap > 0 else 0.0
+        result[n] = {
+            "cur_gap":      cur_gap,
+            "avg_gap":      avg_gap,
+            "std_gap":      std_gap,
+            "cv":           cv,
+            "overdue":      overdue,
+            "is_overdue":   overdue > 1.2,
+            "is_long_absent": cur_gap >= 10,
+            "appear_count": len(idx),
+            "periodic":     "강함" if cv < 0.35 else ("보통" if cv < 0.65 else "약함"),
+        }
+    return result
+
+
+def _connection_scores_all(draws: list[DrawResult]) -> dict[int, float]:
+    """
+    전이 확률 행렬 T[prev][next] 를 구성하고,
+    최근 6회차 번호를 기점으로 가중 전이 점수를 계산합니다.
+    이전 회차와 강하게 연결된 번호일수록 다음 회차 출현 가능성이 높다고 봅니다.
+    """
+    window = min(60, len(draws))
+    if window < 10:
+        return {n: 50.0 for n in range(1, 46)}
+
+    T: dict[int, dict[int, int]] = {p: {c: 0 for c in range(1, 46)} for p in range(1, 46)}
+    for i in range(window - 1):
+        for p in draws[i + 1].numbers:   # 이전 회차 번호
+            for c in draws[i].numbers:   # 다음(현재) 회차 번호
+                T[p][c] += 1
+
+    scores: dict[int, float] = {n: 0.0 for n in range(1, 46)}
+    for lag in range(min(6, len(draws))):
+        weight = 2.0 / (lag + 1)          # 최근 회차일수록 가중치 높음
+        for prev_n in draws[lag].numbers:
+            for cand in range(1, 46):
+                scores[cand] += T[prev_n][cand] * weight
+
+    vals = list(scores.values())
+    lo, hi = min(vals), max(vals)
+    span = hi - lo if hi > lo else 1.0
+    return {n: (scores[n] - lo) / span * 100.0 for n in range(1, 46)}
+
+
+def _segment_flow_all(draws: list[DrawResult]) -> list[dict]:
+    """
+    5개 구간(1~10 / 11~20 / 21~30 / 31~40 / 41~45)의
+    최근 5회차 vs 직전 5회차 출현 수를 비교해 구간 흐름을 분석합니다.
+    """
+    segs = [(1, 10, "1~10"), (11, 20, "11~20"), (21, 30, "21~30"),
+            (31, 40, "31~40"), (41, 45, "41~45")]
+    result: list[dict] = []
+    for lo, hi, name in segs:
+        size = hi - lo + 1
+        exp5 = 5 * 6 * size / 45          # 5회차 이론 기대 출현 (메인 6개 기준)
+        r5   = sum(1 for d in draws[:5]    for n in d.numbers if lo <= n <= hi)
+        p5   = sum(1 for d in draws[5:10]  for n in d.numbers if lo <= n <= hi)
+        r20  = sum(1 for d in draws[:20]   for n in d.numbers if lo <= n <= hi)
+        p20  = sum(1 for d in draws[20:40] for n in d.numbers if lo <= n <= hi)
+        rr5  = r5 / exp5 if exp5 > 0 else 1.0
+        rp5  = p5 / exp5 if exp5 > 0 else 1.0
+
+        if   rr5 > rp5 * 1.3: trend = "상승"
+        elif rr5 < rp5 * 0.7: trend = "하락"
+        else:                  trend = "안정"
+
+        result.append({
+            "name": name, "lo": lo, "hi": hi,
+            "r5": r5, "p5": p5, "r20": r20, "p20": p20,
+            "rr5": rr5, "rp5": rp5, "trend": trend,
+        })
+    return result
+
+
+def compute_flow_analysis(draws: list[DrawResult]) -> dict:
+    """
+    모든 흐름 분석 데이터를 일괄 계산합니다.
+    반환 딕셔너리는 print_flow_analysis / print_flow_top6_reasoning 에서 공유합니다.
+    """
+    flow_trend  = _flow_trend_all(draws)
+    gap_data    = _gap_analysis_all(draws)
+    conn_scores = _connection_scores_all(draws)
+    seg_flow    = _segment_flow_all(draws)
+
+    # 장기 미출현 번호 (최근 10회차 이상 연속 미출현)
+    long_absent: list[int] = []
+    for n in range(1, 46):
+        for i in range(min(10, len(draws))):
+            if _appears(draws[i], n):
+                break
+        else:
+            long_absent.append(n)
+
+    # 최근 재등장 번호 (5회차 이상 공백 후 최근 3회차 내 출현)
+    recently_back: list[int] = []
+    for n in range(1, 46):
+        appeared = any(_appears(draws[i], n) for i in range(min(3, len(draws))))
+        if not appeared:
+            continue
+        absent_cnt = 0
+        for i in range(3, min(23, len(draws))):
+            if _appears(draws[i], n):
+                break
+            absent_cnt += 1
+        if absent_cnt >= 5:
+            recently_back.append(n)
+
+    return {
+        "flow_trend":    flow_trend,
+        "gap_data":      gap_data,
+        "conn_scores":   conn_scores,
+        "seg_flow":      seg_flow,
+        "long_absent":   sorted(long_absent),
+        "recently_back": sorted(recently_back),
+    }
+
+
+def print_flow_analysis(draws: list[DrawResult],
+                        scored: list[ScoredNumber],
+                        flow_data: dict) -> None:
+    """
+    번호 흐름 분석 결과를 5개 항목으로 구분하여 시각화 출력합니다.
+    이전·현재·다음 회차의 연결 구조를 중심으로 설명합니다.
+    """
+    ft = flow_data["flow_trend"]
+    gd = flow_data["gap_data"]
+    cs = flow_data["conn_scores"]
+    sf = flow_data["seg_flow"]
+    la = flow_data["long_absent"]
+    rb = flow_data["recently_back"]
+
+    print("\n" + "=" * W)
+    print("  🔗 번호 흐름 분석 — 이전·현재·다음 회차 연결 구조".center(W))
+    print("  단순 빈도가 아닌 회차 간 흐름의 연결성 중심으로 분석합니다.".center(W))
+    print("=" * W)
+
+    # ── 1. 최근 회차 흐름 요약 ────────────────────────────────────────────────
+    print()
+    print("  ┌─ 【1】 최근 회차 흐름 분석 요약 (최근 10회차 기준)")
+    all10    = [n for d in draws[:10] for n in d.numbers]
+    cnt10    = collections.Counter(all10)
+    hot8     = [n for n, _ in cnt10.most_common(8)]
+    cold8    = sorted(n for n in range(1, 46) if cnt10.get(n, 0) == 0)[:8]
+    rising   = sorted(n for n in range(1, 46) if ft[n]["trend"] in ("상승", "급등"))
+    falling  = sorted(n for n in range(1, 46) if ft[n]["trend"] in ("하락", "급락"))
+    print(f"  │  최근 10회차 고빈도 번호    : {hot8}")
+    print(f"  │  최근 10회차 미출현 번호    : {cold8}")
+    print(f"  │  상승/급등 추세 번호         : {rising  if rising  else '해당 없음'}")
+    print(f"  │  하락/급락 추세 번호         : {falling if falling else '해당 없음'}")
+    print(f"  │  ※ 하락/급락 번호는 흐름상 평균 회귀 가능성이 있습니다.")
+    print(f"  └{'─' * (W - 4)}")
+
+    # ── 2. 장기 흐름 분석 요약 ────────────────────────────────────────────────
+    print()
+    print("  ┌─ 【2】 장기 흐름 분석 요약")
+    overdue_sorted = sorted(
+        [(n, gd[n]["cur_gap"], gd[n]["avg_gap"], gd[n]["overdue"])
+         for n in range(1, 46) if gd[n]["is_overdue"]],
+        key=lambda x: x[3], reverse=True,
+    )
+    print(f"  │  장기 미출현 번호 (10회차 이상 연속 미출현): {la if la else '없음'}")
+    print(f"  │  최근 재등장 번호 (장기 공백 후 최근 복귀) : {rb if rb else '없음'}")
+    print(f"  │  평균 대기 초과 번호 (상위 8개, 출현 임박 가능성):")
+    for n, cur, avg, ratio in overdue_sorted[:8]:
+        filled = min(int(ratio * 4), 16)
+        bar = "█" * filled + "░" * (16 - filled)
+        print(f"  │    {n:02d}번  [{bar}] 현재 {cur:>2}회 대기 / 평균 {avg:>4.1f}회 = {ratio:.1f}배")
+    print(f"  └{'─' * (W - 4)}")
+
+    # ── 3. 번호 구간별 흐름 변화 ──────────────────────────────────────────────
+    print()
+    print("  ┌─ 【3】 번호 구간별 흐름 변화 (최근 5회 vs 직전 5회)")
+    for seg in sf:
+        arrow = "↑" if seg["trend"] == "상승" else ("↓" if seg["trend"] == "하락" else "→")
+        bar_r = "█" * seg["r5"] + "░" * max(0, 14 - seg["r5"])
+        bar_p = "█" * seg["p5"] + "░" * max(0, 14 - seg["p5"])
+        diff  = seg["rr5"] - seg["rp5"]
+        ds    = f"+{diff:.2f}" if diff >= 0 else f"{diff:.2f}"
+        print(f"  │  [{seg['name']:>6}] {arrow} {seg['trend']:>2}  "
+              f"최근5회: {bar_r}({seg['r5']:>2}개)  "
+              f"직전5회: {bar_p}({seg['p5']:>2}개)  변화율: {ds}")
+    print(f"  └{'─' * (W - 4)}")
+
+    # ── 4. 이전↔현재↔다음 연결 구조 분석 ────────────────────────────────────
+    print()
+    print("  ┌─ 【4】 이전↔현재↔다음 회차 연결 구조 분석")
+    print(f"  │  최근 5회차 번호 흐름 (최신 → 과거):")
+    for i in range(min(5, len(draws))):
+        nums_str = "  ".join(f"{n:02d}" for n in draws[i].numbers)
+        label    = "최근 1회차전" if i == 0 else f"최근 {i + 1}회차전"
+        print(f"  │    [{label}] {nums_str}")
+
+    recent_set = set(draws[0].numbers)
+    cands = sorted(
+        [(n, cs[n]) for n in range(1, 46) if n not in recent_set],
+        key=lambda x: x[1], reverse=True,
+    )[:12]
+    print(f"  │")
+    print(f"  │  연결 흐름 기반 다음 회차 예측 후보 (최근 회차 미포함, 상위 12개):")
+    for n, score in cands:
+        cur   = gd[n]["cur_gap"]
+        trend = ft[n]["trend"]
+        perio = gd[n]["periodic"]
+        od_mk = " ★초과대기" if gd[n]["is_overdue"] else ""
+        print(f"  │    {n:02d}번  연결강도: {score:>5.1f}  대기: {cur:>2}회  "
+              f"추세: {trend:>3}  주기성: {perio}{od_mk}")
+    print(f"  └{'─' * (W - 4)}")
+
+    # ── 5. 출현 주기성 분석 ────────────────────────────────────────────────────
+    print()
+    print("  ┌─ 【5】 출현 주기성 분석 (강한 주기성 번호 탐색)")
+    strong_p = sorted(
+        [(n, gd[n]["cur_gap"], gd[n]["avg_gap"], gd[n]["overdue"])
+         for n in range(1, 46) if gd[n]["periodic"] == "강함"],
+        key=lambda x: x[3], reverse=True,
+    )
+    if strong_p:
+        print(f"  │  규칙적 주기로 출현하는 번호 (출현 임박 순):")
+        for n, cur, avg, ratio in strong_p[:8]:
+            prog  = min(ratio, 2.0)
+            filled = int(prog * 7)
+            bar   = "█" * filled + "░" * max(0, 14 - filled)
+            stat  = "◎ 임박" if ratio >= 0.9 else ("○ 대기" if ratio >= 0.5 else "● 초기")
+            print(f"  │    {n:02d}번  [{bar}] 평균 {avg:>4.1f}회 간격  현재 {cur:>2}회  {stat}")
+    else:
+        print(f"  │  현재 강한 주기성을 보이는 번호가 없습니다.")
+    print(f"  └{'─' * (W - 4)}")
+    print()
+
+
+def print_flow_top6_reasoning(scored: list[ScoredNumber],
+                               draws: list[DrawResult],
+                               flow_data: dict) -> None:
+    """
+    앙상블 상위 6개 번호에 대해 흐름 분석 기반 선정 근거와 최종 요약을 출력합니다.
+    당첨 보장이 아닌 '흐름상 유리한 가능성' 관점으로 설명합니다.
+    """
+    ft  = flow_data["flow_trend"]
+    gd  = flow_data["gap_data"]
+    cs  = flow_data["conn_scores"]
+    sf  = flow_data["seg_flow"]
+    rb  = flow_data["recently_back"]
+    top6 = scored[:6]
+
+    def _all_ind_scores(s: ScoredNumber) -> list[tuple[str, float]]:
+        return [
+            ("Z-Score", s.s_z), ("볼린저밴드", s.s_bb), ("RSI", s.s_rsi),
+            ("MA", s.s_ma), ("Aroon", s.s_aroon), ("양자분석", s.s_qa),
+            ("양자플럭스", s.s_qf), ("신경패턴", s.s_np),
+            ("통합3D", s.s_m3d), ("통합양자", s.s_iq), ("클러스터", s.s_ac),
+        ]
+
+    print("=" * W)
+    print("  🎯 출현 가능성 후보 최종 요약 — 흐름 분석 기반 번호별 선정 근거".center(W))
+    print("  ※ 통계적 흐름 분석 결과이며, 당첨 보장이 아닙니다.".center(W))
+    print("=" * W)
+    print(f"\n  앙상블 × 흐름 종합 예측 후보:  "
+          f"{' — '.join(f'{s.number:02d}번' for s in top6)}\n")
+
+    for rank, s in enumerate(top6, 1):
+        n    = s.number
+        n_ft = ft[n]
+        n_gd = gd[n]
+        n_cs = cs[n]
+        # 소속 구간 탐색
+        n_seg = next((seg for seg in sf if seg["lo"] <= n <= seg["hi"]), None)
+
+        print("─" * (W - 4))
+        print(f"  [{rank}위 예측 후보] {n:02d}번   앙상블 종합 점수: {s.composite:.2f}/100  {_level(s.composite)}")
+        print()
+
+        # ── 선정 근거 목록 구성 ───────────────────────────────────────────────
+        reasons: list[str] = []
+
+        if n_gd["is_long_absent"]:
+            reasons.append(
+                f"장기 미출현 — {n_gd['cur_gap']}회차 대기 중 "
+                f"(평균 {n_gd['avg_gap']:.1f}회 대비 {n_gd['overdue']:.1f}배), "
+                f"흐름상 재등장 가능성"
+            )
+        elif n_gd["is_overdue"]:
+            reasons.append(
+                f"평균 대기 초과 — 현재 {n_gd['cur_gap']}회 대기 / "
+                f"평균 {n_gd['avg_gap']:.1f}회 ({n_gd['overdue']:.1f}배), "
+                f"출현 임박 가능성"
+            )
+
+        trend = n_ft["trend"]
+        if trend == "급락":
+            reasons.append(
+                f"최근 급락 추세 — 이전5회 {n_ft['prev5']}번 → 최근5회 {n_ft['f5']}번으로 감소, "
+                f"흐름상 평균 회귀 가능성"
+            )
+        elif trend == "하락":
+            reasons.append("출현 감소 추세 — 흐름상 저조 구간, 회귀 가능성")
+        elif trend in ("상승", "급등"):
+            reasons.append(
+                f"출현 {trend} 추세 — 최근5회 {n_ft['f5']}번 출현, 모멘텀 지속 가능성"
+            )
+        else:
+            reasons.append(
+                f"안정적 출현 패턴 — 최근5회 {n_ft['f5']}번 출현, 평균 수준 유지"
+            )
+
+        if n_cs >= 70:
+            reasons.append(
+                f"연결 흐름 강도 높음 (점수 {n_cs:.0f}/100) — "
+                f"이전 회차들과 강한 전이 연관성"
+            )
+        elif n_cs >= 50:
+            reasons.append(f"연결 흐름 중간 수준 (점수 {n_cs:.0f}/100)")
+
+        if n_gd["periodic"] == "강함":
+            prog = n_gd["overdue"]
+            stat = "출현 임박" if prog >= 0.9 else "대기 진행 중"
+            reasons.append(
+                f"규칙적 주기 패턴 감지 (변동계수 {n_gd['cv']:.2f}) — "
+                f"현재 주기 진행률 {prog:.1%}, {stat}"
+            )
+
+        if n in rb:
+            reasons.append("장기 공백 후 최근 재등장 — 복귀 흐름 패턴 진행 가능성")
+
+        if n_seg:
+            seg_note = (
+                f"소속 구간 [{n_seg['name']}] {n_seg['trend']} 추세 "
+                f"(최근5회 {n_seg['r5']}개 / 직전5회 {n_seg['p5']}개)"
+            )
+            if n_seg["trend"] == "하락":
+                seg_note += " — 구간 내 회귀 가능성"
+            reasons.append(seg_note)
+
+        high_ind = [(nm, v) for nm, v in _all_ind_scores(s) if v >= 70]
+        if high_ind:
+            hs = ", ".join(
+                f"{nm}({v:.0f})" for nm, v in sorted(high_ind, key=lambda x: -x[1])[:4]
+            )
+            reasons.append(f"앙상블 강점 지표: {hs}")
+
+        print(f"  ▸ 번호별 선정 근거:")
+        for i, reason in enumerate(reasons, 1):
+            print(f"     {i}. {reason}")
+
+        print()
+        print(f"  ▸ 흐름 상세 데이터:")
+        print(f"     출현 추세  : {trend:<6}  "
+              f"(최근5회: {n_ft['f5']}번 출현 / 직전5회: {n_ft['prev5']}번 출현)")
+        print(f"     대기 상태  : 현재 {n_gd['cur_gap']}회 대기 / "
+              f"평균 {n_gd['avg_gap']:.1f}회 / 초과율 {n_gd['overdue']:.1f}배")
+        print(f"     연결 강도  : {n_cs:>5.1f}/100   주기성: {n_gd['periodic']}")
+        if n_seg:
+            print(f"     구간 흐름  : [{n_seg['name']}] {n_seg['trend']} "
+                  f"(최근5: {n_seg['r5']}개 / 직전5: {n_seg['p5']}개)")
+        print()
+
+    print("─" * (W - 4))
+
+    # ── 핵심 이유 요약 ─────────────────────────────────────────────────────────
+    print()
+    print("  ┌─ 출현 가능성이 높다고 판단한 핵심 이유 요약")
+    print(f"  │  1. 앙상블 종합 점수 상위 6개 — 11종 지표의 가중 합산 결과")
+    print(f"  │  2. 평균 대기 초과 여부 — 과소출현 구간 진입 가능성")
+    print(f"  │  3. 회차 간 연결 흐름 — 전이 확률 기반 다음 회차 연관성")
+    print(f"  │  4. 구간 흐름 분석 — 저조한 구간에서의 흐름상 회귀 가능성")
+    print(f"  │  5. 주기성 분석 — 규칙적 출현 패턴 기반 임박 여부")
+    print(f"  │")
+    print(f"  │  ※ 이 분석은 '흐름상 유리한 가능성'을 나타낼 뿐입니다.")
+    print(f"  │     로또는 완전 무작위 추첨이며, 어떤 분석도 당첨을 보장하지 않습니다.")
+    print(f"  └{'─' * (W - 4)}")
+    print()
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # §6. 메인 진입점
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -957,10 +1390,10 @@ def main(n_rounds: int = 100, seed: int = 42) -> None:
     # 1. 전체 데이터 테이블
     print_full_table(scored)
 
-    # 2. 기술 지표 분석 패널 (전통 5종 + 다중 신호 컨센서스)
-    print_technical_panel(scored)
+    # 2. 기술 지표 분석 패널 — 요구사항 1번에 의해 출력 삭제
+    # print_technical_panel(scored)
 
-    # 3. 고급 예측 엔진 6종 패널 (웹페이지 상세 출력)
+    # 3. 고급 예측 엔진 6종 패널
     print_engine_panel(scored)
 
     # 4. 점수 분포 요약
@@ -972,7 +1405,16 @@ def main(n_rounds: int = 100, seed: int = 42) -> None:
     # 6. 가중치 요약
     print_weight_summary()
 
-    # 7. 면책 고지
+    # 7. 번호 흐름 분석 — 회차 간 연결 구조 분석 (신규 추가)
+    print(f"\n  번호 흐름 분석 계산 중... ", end="", flush=True)
+    flow_data = compute_flow_analysis(draws)
+    print("완료.\n")
+    print_flow_analysis(draws, scored, flow_data)
+
+    # 8. 흐름 분석 기반 번호별 선정 근거 최종 요약 (신규 추가)
+    print_flow_top6_reasoning(scored, draws, flow_data)
+
+    # 9. 면책 고지
     print_disclaimer()
 
 
