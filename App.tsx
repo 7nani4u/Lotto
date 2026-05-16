@@ -715,20 +715,20 @@ const App: React.FC = () => {
                       ))}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 text-sm text-gray-300 border-t border-gray-700/50 pt-6">
-                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                    <div className="grid grid-cols-2 gap-4 text-sm text-gray-300 border-t border-gray-700/60 pt-6">
+                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
                         <div className="text-gray-400 mb-2 font-medium">총합</div>
                         <div className="text-2xl font-black text-white">{prediction.stats.sum}</div>
                       </div>
-                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
                         <div className="text-gray-400 mb-2 font-medium">AI 신뢰도</div>
                         <div className="text-2xl font-black text-purple-400">{prediction.confidence}%</div>
                       </div>
-                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
                         <div className="text-gray-400 mb-2 font-medium">홀짝 비율</div>
                         <div className="text-2xl font-black text-blue-300">{prediction.stats.oddEvenRatio}</div>
                       </div>
-                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700 flex flex-col items-center justify-center">
+                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
                         <div className="text-gray-400 mb-2 font-medium">고저 비율</div>
                         <div className="text-2xl font-black text-purple-300">{prediction.stats.highLowRatio}</div>
                       </div>
@@ -766,8 +766,8 @@ const App: React.FC = () => {
             return f.length > 0 ? f.join(' · ') : '평균 범위 내';
           };
           return (
-            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-teal-900/50 mt-8">
-              <h2 className="text-lg font-bold text-teal-300 border-b border-gray-700 pb-3 mb-5 flex items-center gap-2">
+            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-teal-900/40 mt-8">
+              <h2 className="text-lg font-bold text-teal-300 border-b border-gray-700/60 pb-3 mb-5 flex items-center gap-2">
                 <span>🏆</span> 출현가능성 상위 6개 번호
               </h2>
 
@@ -899,7 +899,7 @@ const App: React.FC = () => {
           );
         })()}
 
-        {/* ══ [1.5] 🔗 번호 흐름 分析 ══ */}
+        {/* ══ [1.5] 🔗 번호 흐름 분석 ══ */}
         {flowAnalysis && indicatorTable.length > 0 && (() => {
           const top6 = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6);
           const { trends, gapInfo, segmentFlow, longAbsent, recentlyBack } = flowAnalysis;
@@ -920,9 +920,9 @@ const App: React.FC = () => {
           for (let n = 1; n <= 45; n++) trendGroups[trends[n]]?.push(n);
 
           return (
-            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-violet-900/40 mt-8">
-              <h2 className="text-lg font-bold text-violet-300 border-b border-gray-700 pb-3 mb-6 flex items-center gap-2">
-                <span>🔗</span> 번호 흐름 分析
+            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-indigo-900/40 mt-8">
+              <h2 className="text-lg font-bold text-indigo-300 border-b border-gray-700/60 pb-3 mb-6 flex items-center gap-2">
+                <span>🔗</span> 번호 흐름 분석
                 <span className="text-xs font-normal text-gray-500 ml-1">최근 10회차 추세 · 구간 흐름 · 대기 현황</span>
               </h2>
 
@@ -1049,37 +1049,10 @@ const App: React.FC = () => {
           );
         })()}
 
-        {/* ══ [2] 번호 출현 현황 ══ */}
-        {stats && (
-          <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-blue-900/40 mt-8">
-            <h2 className="text-lg font-bold text-blue-300 border-b border-gray-700 pb-3 mb-5 flex items-center gap-2">
-              <span>🔥</span> 번호 출현 현황
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-gray-900 rounded-xl p-4 border border-red-900/40">
-                <div className="text-xs font-bold text-red-400 mb-3 flex items-center gap-1.5">🔥 최다 출현 (Hot 5)</div>
-                <div className="flex gap-2 flex-wrap">
-                  {stats.hotNumbers.slice(0, 5).map(n => (
-                    <Ball key={n} num={n} small onClick={() => handleBallClick(n)} />
-                  ))}
-                </div>
-              </div>
-              <div className="bg-gray-900 rounded-xl p-4 border border-blue-900/40">
-                <div className="text-xs font-bold text-blue-400 mb-3 flex items-center gap-1.5">❄️ 최소 출현 (Cold 5)</div>
-                <div className="flex gap-2 flex-wrap">
-                  {stats.coldNumbers.slice(0, 5).map(n => (
-                    <Ball key={n} num={n} small onClick={() => handleBallClick(n)} />
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* ══ [3] 주요 통계 분석 ══ */}
         {/* 출현 빈도 순위 (전체 1~45, 15개씩 3페이지) */}
-        <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-gray-700 mt-8">
-          <div className="flex flex-col sm:flex-row items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
+        <div className="bg-gray-800 rounded-2xl p-6 shadow-xl border border-blue-900/40 mt-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between border-b border-gray-700/60 pb-4 mb-6 gap-3">
             <h2 className="text-lg font-bold text-blue-300 flex items-center gap-2"><span>📊</span> 출현 빈도 순위 <span className="text-gray-500 font-normal text-xs">— 262회차부터 전체 1~45번</span></h2>
             {/* 페이지 이동 버튼 */}
             <div className="flex items-center gap-2">
@@ -1138,8 +1111,8 @@ const App: React.FC = () => {
         </div>
 
         {/* ══ [4] 보조 분석 — 최근 당첨 번호 ══ */}
-        <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-gray-700 mt-8">
-          <div className="flex flex-col md:flex-row items-center justify-between border-b border-gray-700 pb-4 mb-6">
+        <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/40 mt-8">
+          <div className="flex flex-col md:flex-row items-center justify-between border-b border-gray-700/60 pb-4 mb-6">
             <h2 className="text-lg font-bold text-blue-300 flex items-center gap-2"><span>📅</span> 보조 분석 — 최근 당첨 번호</h2>
             <div className="text-xs sm:text-sm text-gray-400 bg-gray-700/40 px-3 py-2 rounded-xl mt-3 md:mt-0 flex flex-col sm:flex-row items-center gap-1 sm:gap-3 text-center break-keep break-words">
               <span className="text-yellow-400">💡 번호 클릭 → 정밀 분석</span>
@@ -1203,7 +1176,7 @@ const App: React.FC = () => {
 
                     <div className="space-y-6 text-gray-200">
                       {/* 1. 당첨 번호 요약 */}
-                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
                         <div className="text-center mb-4">
                           <div className="text-sm text-gray-400 mb-1">{dynamicData.date}</div>
                           <div className="text-xl font-black text-white">제 {dynamicData.round}회 당첨 번호</div>
@@ -1219,7 +1192,7 @@ const App: React.FC = () => {
 
                       {/* 2. 구간 분포 & 홀짝/고저 */}
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                        <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
                           <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
                             <span>📊</span> 구간 분포
                           </h3>
@@ -1239,18 +1212,18 @@ const App: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                        <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
                           <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
                             <span>⚖️</span> 홀짝 · 고저
                           </h3>
                           <div className="grid grid-cols-2 gap-4">
-                            <div className="bg-gray-800 p-3 rounded-lg text-center border border-gray-700/50">
+                            <div className="bg-gray-800 p-3 rounded-lg text-center border border-gray-700/60/60">
                               <div className="text-xs text-gray-400 mb-1">홀짝 비율</div>
                               <div className="text-xl font-black text-blue-300">
                                 {dynamicData.sections.oddEven.odd} : {dynamicData.sections.oddEven.even}
                               </div>
                             </div>
-                            <div className="bg-gray-800 p-3 rounded-lg text-center border border-gray-700/50">
+                            <div className="bg-gray-800 p-3 rounded-lg text-center border border-gray-700/60/60">
                               <div className="text-xs text-gray-400 mb-1">고저 비율</div>
                               <div className="text-xl font-black text-purple-300">
                                 {dynamicData.sections.highLow.low} : {dynamicData.sections.highLow.high}
@@ -1264,7 +1237,7 @@ const App: React.FC = () => {
                       </div>
 
                       {/* 3. 번호 합계 */}
-                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60 flex flex-col sm:flex-row items-center justify-between gap-4">
                         <div className="flex items-center gap-2">
                           <span>➕</span>
                           <span className="text-sm font-bold text-gray-300">번호 합계</span>
@@ -1288,7 +1261,7 @@ const App: React.FC = () => {
                       </div>
 
                       {/* 4. 이전 회차 비교 */}
-                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
                         <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
                           <span>🔄</span> 이전 회차 비교
                           <span className="text-xs text-gray-500 font-normal ml-2">({dynamicData.sections.prevCompare.prevRound}회 → {dynamicData.round}회)</span>
@@ -1307,7 +1280,7 @@ const App: React.FC = () => {
                             </div>
                           </div>
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                            <div className="bg-gray-800 p-3 rounded-lg border border-gray-700/50">
+                            <div className="bg-gray-800 p-3 rounded-lg border border-gray-700/60">
                               <div className="text-xs text-gray-400 mb-2">재등장 ({dynamicData.sections.prevCompare.reappeared.length}개)</div>
                               <div className="flex gap-2 flex-wrap">
                                 {dynamicData.sections.prevCompare.reappeared.map(n => (
@@ -1315,7 +1288,7 @@ const App: React.FC = () => {
                                 ))}
                               </div>
                             </div>
-                            <div className="bg-gray-800 p-3 rounded-lg border border-gray-700/50">
+                            <div className="bg-gray-800 p-3 rounded-lg border border-gray-700/60">
                               <div className="text-xs text-gray-400 mb-2">신규 ({dynamicData.sections.prevCompare.newNumbers.length}개)</div>
                               <div className="flex gap-2 flex-wrap">
                                 {dynamicData.sections.prevCompare.newNumbers.map(n => (
@@ -1328,7 +1301,7 @@ const App: React.FC = () => {
                       </div>
 
                       {/* 5. 함께 자주 나온 쌍 Top 5 */}
-                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/50">
+                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
                         <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
                           <span>🔗</span> 함께 자주 나온 쌍 Top 5
                         </h3>
@@ -1364,38 +1337,38 @@ const App: React.FC = () => {
         </div>
 
         {selectedAnalysisNum && repeatAnalysis && (
-          <div ref={analysisReportRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/50 mt-8">
-            <h2 className="text-xl sm:text-2xl font-bold mb-6 text-blue-300 flex items-center justify-center md:justify-start gap-2 sm:gap-3 border-b border-gray-700 pb-4 break-keep break-words">
+          <div ref={analysisReportRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/40 mt-8">
+            <h2 className="text-xl sm:text-2xl font-bold mb-6 text-blue-300 flex items-center justify-center md:justify-start gap-2 sm:gap-3 border-b border-gray-700/60 pb-4 break-keep break-words">
               <Ball num={selectedAnalysisNum} small />
               <span>선택 번호 정밀 분석 리포트</span>
             </h2>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="space-y-4 lg:col-span-1">
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
                   <span className="text-gray-400 font-medium">262회차부터 출현 횟수</span>
                   <span className="font-bold text-xl text-white">{repeatAnalysis.totalOccurrences}회</span>
                 </div>
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
                   <span className="text-gray-400 font-medium">최근 10회차 내 출현</span>
                   <span className="font-bold text-xl text-white">{repeatAnalysis.recent10Occurrences}회</span>
                 </div>
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
                   <span className="text-gray-400 font-medium">최근 30회차 내 출현</span>
                   <span className="font-bold text-xl text-white">{repeatAnalysis.recent30Occurrences}회</span>
                 </div>
               </div>
 
               <div className="space-y-4 lg:col-span-1">
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
                   <span className="text-gray-400 font-medium">연속(이월) 출현 횟수</span>
                   <span className="font-bold text-xl text-white">{repeatAnalysis.repeatAfterOne}회</span>
                 </div>
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
                   <span className="text-gray-400 font-medium">평균 출현 간격</span>
                   <span className="font-bold text-xl text-white">{repeatAnalysis.averageGap.toFixed(1)}회</span>
                 </div>
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700 flex justify-between items-center">
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
                   <span className="text-gray-400 font-medium">미출현 기간</span>
                   <span className={`font-bold text-xl ${repeatAnalysis.roundsSinceLastSeen > 10 ? 'text-red-400' : 'text-white'}`}>
                     {repeatAnalysis.roundsSinceLastSeen}회차째
@@ -1403,7 +1376,7 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-gray-900 p-5 rounded-xl border border-blue-800/50 flex flex-col justify-center lg:col-span-1 relative overflow-hidden">
+              <div className="bg-gray-900 p-5 rounded-xl border border-blue-900/40 flex flex-col justify-center lg:col-span-1 relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-2 opacity-10 text-6xl">🤖</div>
                 <div className="text-sm text-blue-400 mb-2 font-bold flex items-center gap-2">
                   <span>AI Insight</span>
@@ -1427,8 +1400,8 @@ const App: React.FC = () => {
             </div>
 
             {/* Z-Score 지표 */}
-            <div className="mt-6 bg-gray-900 rounded-xl border border-indigo-800/50 p-5">
-              <h3 className="text-sm font-bold text-indigo-400 mb-4 flex items-center gap-2">
+            <div className="mt-6 bg-gray-900 rounded-xl border border-blue-900/40 p-5">
+              <h3 className="text-sm font-bold text-blue-400 mb-4 flex items-center gap-2">
                 <span>📊</span> Z-Score 지표 <span className="text-gray-500 font-normal text-xs">(전체 회차 기준 통계적 편차)</span>
               </h3>
               <div className="flex flex-col sm:flex-row items-center gap-6">
@@ -1463,8 +1436,8 @@ const App: React.FC = () => {
 
             {/* 동반 출현 번호 Top 10 */}
             {repeatAnalysis.coOccurrenceTop10.length > 0 && (
-              <div className="mt-6 bg-gray-900 rounded-xl border border-purple-800/50 p-5">
-                <h3 className="text-sm font-bold text-purple-400 mb-4 flex items-center gap-2">
+              <div className="mt-6 bg-gray-900 rounded-xl border border-indigo-900/40 p-5">
+                <h3 className="text-sm font-bold text-indigo-300 mb-4 flex items-center gap-2">
                   <span>🔗</span> 동반 출현 번호 Top 10 <span className="text-gray-500 font-normal text-xs">(같은 회차에 함께 출현한 번호 순위)</span>
                 </h3>
                 <div className="space-y-2">
