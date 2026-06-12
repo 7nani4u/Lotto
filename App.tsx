@@ -186,13 +186,14 @@ const App: React.FC = () => {
     const base = strategyAnalysis?.optimizedWeights;
     if (!quantumOptResult || !quantumApplied) return base;
     return {
-      gaussianFactor:      base?.gaussianFactor      ?? 1.0,
-      fibonacciFactor:     base?.fibonacciFactor      ?? 1.4,
-      goldenRatioFactor:   base?.goldenRatioFactor    ?? 1.6,
-      pythagoreanFactor:   base?.pythagoreanFactor    ?? 0.4,
-      paretoTier1Factor:   base?.paretoTier1Factor    ?? 2.5,
-      quantumNoiseFactor:  quantumOptResult.optimalQNoise,
-      quantumSigma:        quantumOptResult.optimalSigma,
+      ...base,
+      gaussianFactor: base?.gaussianFactor ?? 1.0,
+      fibonacciFactor: base?.fibonacciFactor ?? 1.4,
+      goldenRatioFactor: base?.goldenRatioFactor ?? 1.6,
+      pythagoreanFactor: base?.pythagoreanFactor ?? 0.4,
+      paretoTier1Factor: base?.paretoTier1Factor ?? 2.5,
+      quantumNoiseFactor: quantumOptResult.optimalQNoise,
+      quantumSigma: quantumOptResult.optimalSigma,
       whitsonFilterEnabled: base?.whitsonFilterEnabled ?? true,
     };
   }, [strategyAnalysis, quantumOptResult, quantumApplied]);

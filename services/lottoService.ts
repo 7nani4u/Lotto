@@ -234,14 +234,7 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
   const bollingerPctB   = techEntry?.bollingerPctB   ?? 0.5;
   const aroonOscillator = techEntry?.aroonOscillator ?? 0;
 
-  // 0~100 정규화 점수 (평균 회귀 방향: 과소출현 = 높은 점수)
-  const _sMA    = Math.max(0, Math.min(100, (-maSignal + 0.30) / 0.60 * 100));
-  const _sRSI   = Math.max(0, Math.min(100, 100 - rsi));
-  const _sBB    = Math.max(0, Math.min(100, (1 - bollingerPctB) * 100));
-  const _sAroon = Math.max(0, Math.min(100, (-aroonOscillator + 100) / 2));
-  const _sZ     = Math.max(0, Math.min(100, (-zScore + 3) / 6 * 100));
-  // 가중 평균: Z(30%) BB(25%) RSI(20%) MA(15%) Aroon(10%)
-  const techScore = +( 0.30*_sZ + 0.25*_sBB + 0.20*_sRSI + 0.15*_sMA + 0.10*_sAroon ).toFixed(2);
+  const techScore = +(techEntry?.hybridCompositeScore ?? 50).toFixed(2);
 
   // 이산 신호 점수: +1(회귀 신호) / 0(중립) / -1(억제 신호)
   const maScore    = techEntry?.maScore    ?? 0;
@@ -465,6 +458,19 @@ export interface TechnicalIndicatorScore {
   bollingerPctB: number;   // %B: 0 = lower band, 1 = upper band; outside [0,1] = extreme deviation
   aroonOscillator: number; // −100 to +100: positive = appeared recently with short droughts
   compositeBoost: number;  // final multiplicative weight from all 4 indicators combined
+  zScore: number;
+  emaShort: number;
+  emaLong: number;
+  macdHist: number;
+  adx: number;
+  atr: number;
+  zSubScore: number;
+  bbSubScore: number;
+  rsiSubScore: number;
+  meanReversionScore: number;
+  trendScore: number;
+  confirmationScore: number;
+  hybridCompositeScore: number;
   // 이산 신호 점수: +1 회귀 신호 / 0 중립 / -1 억제 신호
   maScore: number;
   rsiScore: number;
@@ -472,6 +478,141 @@ export interface TechnicalIndicatorScore {
   aroonScore: number;
   // 가중 합산 신호 점수 (MA 20% + RSI 30% + BB 35% + Aroon 15%) — 범위: −1.0 ~ +1.0
   signalScore: number;
+}
+
+export interface HybridStrategyConfig {
+  emaShortWindow: number;
+  emaLongWindow: number;
+  macdFast: number;
+  macdSlow: number;
+  macdSignal: number;
+  rsiWindow: number;
+  bbWindow: number;
+  aroonWindow: number;
+  adxWindow: number;
+  atrWindow: number;
+  zWeight: number;
+  meanReversionWeight: number;
+  trendWeight: number;
+  confirmationWeight: number;
+}
+
+const DEFAULT_HYBRID_CONFIG: HybridStrategyConfig = {
+  emaShortWindow: 5,
+  emaLongWindow: 15,
+  macdFast: 4,
+  macdSlow: 11,
+  macdSignal: 4,
+  rsiWindow: 12,
+  bbWindow: 20,
+  aroonWindow: 20,
+  adxWindow: 8,
+  atrWindow: 18,
+  zWeight: 0.25,
+  meanReversionWeight: 0.30,
+  trendWeight: 0.25,
+  confirmationWeight: 0.20,
+};
+
+function clampScore(value: number, min = 0, max = 100): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function resolveHybridConfig(overrides?: Partial<HybridStrategyConfig> | OptimizedWeights): HybridStrategyConfig {
+  return {
+    ...DEFAULT_HYBRID_CONFIG,
+    emaShortWindow: overrides?.emaShortWindow ?? DEFAULT_HYBRID_CONFIG.emaShortWindow,
+    emaLongWindow: overrides?.emaLongWindow ?? DEFAULT_HYBRID_CONFIG.emaLongWindow,
+    macdFast: overrides?.macdFast ?? DEFAULT_HYBRID_CONFIG.macdFast,
+    macdSlow: overrides?.macdSlow ?? DEFAULT_HYBRID_CONFIG.macdSlow,
+    macdSignal: overrides?.macdSignal ?? DEFAULT_HYBRID_CONFIG.macdSignal,
+    rsiWindow: overrides?.rsiWindow ?? DEFAULT_HYBRID_CONFIG.rsiWindow,
+    bbWindow: overrides?.bbWindow ?? DEFAULT_HYBRID_CONFIG.bbWindow,
+    aroonWindow: overrides?.aroonWindow ?? DEFAULT_HYBRID_CONFIG.aroonWindow,
+    adxWindow: overrides?.adxWindow ?? DEFAULT_HYBRID_CONFIG.adxWindow,
+    atrWindow: overrides?.atrWindow ?? DEFAULT_HYBRID_CONFIG.atrWindow,
+    zWeight: overrides?.zWeight ?? DEFAULT_HYBRID_CONFIG.zWeight,
+    meanReversionWeight: overrides?.meanReversionWeight ?? DEFAULT_HYBRID_CONFIG.meanReversionWeight,
+    trendWeight: overrides?.trendWeight ?? DEFAULT_HYBRID_CONFIG.trendWeight,
+    confirmationWeight: overrides?.confirmationWeight ?? DEFAULT_HYBRID_CONFIG.confirmationWeight,
+  };
+}
+
+function buildBinarySeries(results: LottoResult[], num: number, length: number): number[] {
+  const size = Math.min(length, results.length);
+  return Array.from({ length: size }, (_, idx) => {
+    const draw = results[size - 1 - idx];
+    return draw && (draw.numbers.includes(num) || draw.bonus === num) ? 1 : 0;
+  });
+}
+
+function computeEMA(series: number[], period: number): number {
+  if (series.length === 0) return 0;
+  const alpha = 2 / (period + 1);
+  let ema = series[0];
+  for (let i = 1; i < series.length; i++) {
+    ema = series[i] * alpha + ema * (1 - alpha);
+  }
+  return ema;
+}
+
+function computeLotteryEMA(results: LottoResult[], num: number, window: number): number {
+  const series = buildBinarySeries(results, num, window);
+  return computeEMA(series, Math.max(1, Math.min(window, series.length || 1)));
+}
+
+function computeLotteryMACDHistogram(
+  results: LottoResult[],
+  num: number,
+  fastWindow: number,
+  slowWindow: number,
+  signalWindow: number
+): number {
+  const series = buildBinarySeries(results, num, Math.max(slowWindow + signalWindow + 8, 24));
+  if (series.length === 0) return 0;
+  const macdSeries: number[] = [];
+  for (let i = 1; i <= series.length; i++) {
+    const slice = series.slice(0, i);
+    const fast = computeEMA(slice, Math.max(1, Math.min(fastWindow, slice.length)));
+    const slow = computeEMA(slice, Math.max(1, Math.min(slowWindow, slice.length)));
+    macdSeries.push(fast - slow);
+  }
+  const macdLine = macdSeries[macdSeries.length - 1] ?? 0;
+  const signal = computeEMA(macdSeries, Math.max(1, Math.min(signalWindow, macdSeries.length)));
+  return macdLine - signal;
+}
+
+function computeLotteryADX(
+  results: LottoResult[],
+  num: number,
+  window: number
+): { adx: number; plusDI: number; minusDI: number } {
+  const series = buildBinarySeries(results, num, window + 1);
+  if (series.length < 2) return { adx: 0, plusDI: 0, minusDI: 0 };
+  let plusDM = 0;
+  let minusDM = 0;
+  let trueRange = 0;
+  for (let i = 1; i < series.length; i++) {
+    const delta = series[i] - series[i - 1];
+    if (delta > 0) plusDM += delta;
+    else if (delta < 0) minusDM += -delta;
+    trueRange += Math.abs(delta);
+  }
+  const tr = trueRange || 1;
+  const plusDI = (plusDM / tr) * 100;
+  const minusDI = (minusDM / tr) * 100;
+  const adx = (Math.abs(plusDI - minusDI) / Math.max(1, plusDI + minusDI)) * 100;
+  return { adx, plusDI, minusDI };
+}
+
+function computeLotteryATR(results: LottoResult[], num: number, window: number): number {
+  const series = buildBinarySeries(results, num, window + 1);
+  if (series.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < series.length; i++) {
+    total += Math.abs(series[i] - series[i - 1]);
+  }
+  return total / (series.length - 1);
 }
 
 // ------------------------------------------------------------------
@@ -692,58 +833,90 @@ function computeAroon(results: LottoResult[], num: number, window = 30): number 
 // ------------------------------------------------------------------
 export function buildTechnicalWeights(
   results: LottoResult[],
-  maShortW   = 10,
-  maLongW    = 30,
-  rsiWindow  = 20,
-  bbWindow   = 30,
-  aroonWindow = 25
+  overrides?: Partial<HybridStrategyConfig> | OptimizedWeights
 ): TechnicalIndicatorScore[] {
-  // Bollinger is cross-sectional — compute once for all 45 numbers
-  const bbPctB = computeBollingerBands(results, bbWindow);
+  const config = resolveHybridConfig(overrides);
+  const bbPctB = computeBollingerBands(results, config.bbWindow);
+  const allFreq: Record<number, number> = {};
+  for (let i = 1; i <= 45; i++) allFreq[i] = 0;
+  results.forEach(r => {
+    r.numbers.forEach(n => { allFreq[n]++; });
+    allFreq[r.bonus]++;
+  });
+  const freqValues = Object.values(allFreq);
+  const freqMean = freqValues.reduce((a, b) => a + b, 0) / 45;
+  const freqStd = Math.sqrt(freqValues.reduce((s, v) => s + (v - freqMean) ** 2, 0) / 45) || 1;
 
   return Array.from({ length: 45 }, (_, i) => {
     const num = i + 1;
-
-    const maSignal       = computeLotteryMA(results, num, maShortW, maLongW);
-    const rsi            = computeLotteryRSI(results, num, rsiWindow);
-    const bollingerPctB  = bbPctB[num];
-    const aroonOscillator = computeAroon(results, num, aroonWindow);
-
-    // MA multiplier: signal × 0.4 translates ≈ ±0.3 signal → ±12% weight shift
-    const maBoost = 1.0 + maSignal * 0.4;
-
-    // RSI multiplier: mean-reversion logic (under-represented → boost)
-    let rsiBoost: number;
-    if      (rsi > 70) rsiBoost = 0.90;                          // overbought
-    else if (rsi < 30) rsiBoost = 1.10;                          // oversold
-    else               rsiBoost = 1.0 + (50 - rsi) / 50 * 0.05; // subtle linear in neutral zone
-
-    // Bollinger multiplier: frequency band deviation
-    let bbBoost: number;
-    if      (bollingerPctB > 1.0) bbBoost = 0.92;                          // above upper band
-    else if (bollingerPctB < 0.0) bbBoost = 1.08;                          // below lower band
-    else                          bbBoost = 1.0 + (0.5 - bollingerPctB) * 0.08; // in-band linear nudge
-
-    // Aroon multiplier: gap-recency momentum
-    let aroonBoost: number;
-    if      (aroonOscillator > 50)  aroonBoost = 1.06;                              // strong recent momentum
-    else if (aroonOscillator < -50) aroonBoost = 0.94;                              // cold-streak pattern
-    else                            aroonBoost = 1.0 + (aroonOscillator / 50) * 0.03; // subtle in-range nudge
-
-    const compositeBoost = Math.max(0.5, Math.min(2.0,
-      maBoost * rsiBoost * bbBoost * aroonBoost
-    ));
+    const emaShort = computeLotteryEMA(results, num, config.emaShortWindow);
+    const emaLong = computeLotteryEMA(results, num, config.emaLongWindow);
+    const maSignal = emaShort - emaLong;
+    const macdHist = computeLotteryMACDHistogram(results, num, config.macdFast, config.macdSlow, config.macdSignal);
+    const rsi = computeLotteryRSI(results, num, config.rsiWindow);
+    const bollingerPctB = bbPctB[num];
+    const aroonOscillator = computeAroon(results, num, config.aroonWindow);
+    const { adx } = computeLotteryADX(results, num, config.adxWindow);
+    const atr = computeLotteryATR(results, num, config.atrWindow);
+    const zScore = (allFreq[num] - freqMean) / freqStd;
+    const zSubScore = clampScore(((-zScore + 2.6) / 5.2) * 100);
+    const bbSubScore = clampScore((1 - bollingerPctB) * 100);
+    const rsiSubScore = clampScore(100 - rsi);
+    const gapSubScore = clampScore((-aroonOscillator + 100) / 2);
+    const trendBaseScore = clampScore(
+      50 +
+      (-maSignal * 140) +
+      (macdHist < 0 ? Math.abs(macdHist) * 190 : -macdHist * 130)
+    );
+    const roundsSinceSeen = Math.max(0, results.findIndex(r => r.numbers.includes(num) || r.bonus === num));
+    const overdueScore = clampScore((roundsSinceSeen / 16) * 100);
+    const trendScore = clampScore(trendBaseScore * 0.75 + overdueScore * 0.25);
+    const adxScore = clampScore(adx >= 18 ? 55 + Math.min(25, adx * 0.6) : 35 + adx * 0.8);
+    const atrScore = clampScore(100 - atr * 100);
+    const confirmationScore = clampScore(adxScore * 0.45 + atrScore * 0.30 + gapSubScore * 0.25);
+    const meanReversionScore = clampScore(bbSubScore * 0.5 + rsiSubScore * 0.3 + zSubScore * 0.2);
+    const hybridCompositeScore = +(
+      zSubScore * config.zWeight +
+      meanReversionScore * config.meanReversionWeight +
+      trendScore * config.trendWeight +
+      confirmationScore * config.confirmationWeight
+    ).toFixed(2);
+    const compositeBoost = Math.max(0.72, Math.min(1.30, 0.72 + (hybridCompositeScore / 100) * 0.58));
 
     // 이산 신호 점수 (평균 회귀 관점): +1 회귀 신호 / 0 중립 / -1 억제 신호
-    const maScore    = maSignal < -0.01 ? 1 : maSignal > 0.01 ? -1 : 0;
+    const maScore    = maSignal < -0.01 || macdHist < -0.015 ? 1 : maSignal > 0.015 ? -1 : 0;
     const rsiScore   = rsi < 30 ? 1 : rsi > 70 ? -1 : 0;
     const bbScore    = bollingerPctB < 0.15 ? 1 : bollingerPctB > 0.85 ? -1 : 0;
-    const aroonScore = aroonOscillator < -50 ? 1 : aroonOscillator > 50 ? -1 : 0;
+    const aroonScore = gapSubScore >= 65 ? 1 : gapSubScore <= 35 ? -1 : 0;
     // 가중 합산: MA(20%) RSI(30%) BB(35%) Aroon(15%) — 범위: −1.0 ~ +1.0
     const signalScore = +(0.20*maScore + 0.30*rsiScore + 0.35*bbScore + 0.15*aroonScore).toFixed(4);
 
-    return { number: num, maSignal, rsi, bollingerPctB, aroonOscillator, compositeBoost,
-             maScore, rsiScore, bbScore, aroonScore, signalScore };
+    return {
+      number: num,
+      maSignal,
+      rsi,
+      bollingerPctB,
+      aroonOscillator,
+      compositeBoost,
+      zScore: +zScore.toFixed(2),
+      emaShort: +emaShort.toFixed(4),
+      emaLong: +emaLong.toFixed(4),
+      macdHist: +macdHist.toFixed(4),
+      adx: +adx.toFixed(2),
+      atr: +atr.toFixed(4),
+      zSubScore: +zSubScore.toFixed(1),
+      bbSubScore: +bbSubScore.toFixed(1),
+      rsiSubScore: +rsiSubScore.toFixed(1),
+      meanReversionScore: +meanReversionScore.toFixed(1),
+      trendScore: +trendScore.toFixed(1),
+      confirmationScore: +confirmationScore.toFixed(1),
+      hybridCompositeScore,
+      maScore,
+      rsiScore,
+      bbScore,
+      aroonScore,
+      signalScore,
+    };
   });
 }
 
@@ -805,51 +978,27 @@ export interface FullIndicatorAnalysis {
  */
 export function buildFullAnalysisTable(results: LottoResult[]): FullIndicatorAnalysis[] {
   if (!results || results.length < 10) return [];
-
-  // ① Z-Score — 전체 회차 누적 빈도 (보너스 포함)
-  const allFreq: Record<number, number> = {};
-  for (let i = 1; i <= 45; i++) allFreq[i] = 0;
-  results.forEach(r => {
-    r.numbers.forEach(n => { allFreq[n]++; });
-    allFreq[r.bonus]++;
-  });
-  const freqVals = Object.values(allFreq);
-  const freqMean = freqVals.reduce((a, b) => a + b, 0) / 45;
-  const freqStd  = Math.sqrt(freqVals.reduce((s, v) => s + (v - freqMean) ** 2, 0) / 45) || 1;
-
-  // ② MA / RSI / 볼린저 / Aroon (section 4.5 hoisted function)
   const techScores = buildTechnicalWeights(results);
 
-  // ③ 번호별 정규화 점수 계산
   const raw: FullIndicatorAnalysis[] = Array.from({ length: 45 }, (_, i) => {
     const num  = i + 1;
     const tech = techScores[i];
-    const zScore = (allFreq[num] - freqMean) / freqStd;
-
-    // 0~100 정규화 — 과소출현 방향 = 높은 점수 (평균 회귀 기대)
-    const maSubScore    = Math.max(0, Math.min(100, (-tech.maSignal + 0.30) / 0.60 * 100));
-    const rsiSubScore   = Math.max(0, Math.min(100, 100 - tech.rsi));
-    const bbSubScore    = Math.max(0, Math.min(100, (1 - tech.bollingerPctB) * 100));
-    const aroonSubScore = Math.max(0, Math.min(100, (-tech.aroonOscillator + 100) / 2));
-    const zSubScore     = Math.max(0, Math.min(100, (-zScore + 3) / 6 * 100));
-
-    // 가중 합산: Z(30%) + BB(25%) + RSI(20%) + MA(15%) + Aroon(10%)
-    const compositeScore = +(
-      0.30 * zSubScore +
-      0.25 * bbSubScore +
-      0.20 * rsiSubScore +
-      0.15 * maSubScore +
-      0.10 * aroonSubScore
-    ).toFixed(1);
+    const totalOccurrences = results.filter(r => r.numbers.includes(num) || r.bonus === num).length;
+    const maSubScore = tech.trendScore;
+    const rsiSubScore = tech.rsiSubScore;
+    const bbSubScore = tech.bbSubScore;
+    const aroonSubScore = tech.confirmationScore;
+    const zSubScore = tech.zSubScore;
+    const compositeScore = +tech.hybridCompositeScore.toFixed(1);
 
     return {
       number: num,
-      totalOccurrences: allFreq[num],
+      totalOccurrences,
       maSignal:        tech.maSignal,
       rsi:             +tech.rsi.toFixed(1),
       bollingerPctB:   tech.bollingerPctB,
       aroonOscillator: +tech.aroonOscillator.toFixed(1),
-      zScore:          +zScore.toFixed(2),
+      zScore:          tech.zScore,
       maSubScore:      +maSubScore.toFixed(1),
       rsiSubScore:     +rsiSubScore.toFixed(1),
       bbSubScore:      +bbSubScore.toFixed(1),
@@ -890,6 +1039,20 @@ export interface OptimizedWeights {
   quantumNoiseFactor: number;  // qNoise: 가중치 교란 진폭 (Q = 1 ± qNoise/2)
   quantumSigma: number;        // sigma: Box-Muller 번호 교란 표준편차
   whitsonFilterEnabled: boolean;
+  emaShortWindow?: number;
+  emaLongWindow?: number;
+  macdFast?: number;
+  macdSlow?: number;
+  macdSignal?: number;
+  rsiWindow?: number;
+  bbWindow?: number;
+  aroonWindow?: number;
+  adxWindow?: number;
+  atrWindow?: number;
+  zWeight?: number;
+  meanReversionWeight?: number;
+  trendWeight?: number;
+  confirmationWeight?: number;
 }
 
 // ==========================================
@@ -1008,30 +1171,21 @@ function buildCombinedWeights(
   opts?: OptimizedWeights,
   technicalScores?: TechnicalIndicatorScore[]  // MA × RSI × Bollinger × Aroon composite
 ): number[] {
-  const gaussWeights = buildGaussianWeights(stats.frequencies);
-  const maxPythFreq = Math.max(...Object.values(PYTHAGOREAN_FREQ), 1);
-
-  const gaussFactor   = opts?.gaussianFactor      ?? 1.0;
-  const fibFactor     = opts?.fibonacciFactor      ?? 1.6; // 1.4 -> 1.6 (그리드 서치 최적값)
-  const goldenFactor  = opts?.goldenRatioFactor    ?? 1.8; // 1.6 -> 1.8 (그리드 서치 최적값)
-  const pythFactor    = opts?.pythagoreanFactor    ?? 0.3; // 0.4 -> 0.3 (성과 기여도 낮음)
-  const paretoT1      = opts?.paretoTier1Factor    ?? 3.5; // 2.5 -> 3.5 (백테스트 최고 성능)
-  const qNoise        = opts?.quantumNoiseFactor   ?? 0.2; // 0.3 -> 0.2 (결정론성 강화)
+  const qNoise = opts?.quantumNoiseFactor ?? 0.12;
 
   return Array.from({ length: 45 }, (_, i) => {
-    const num = i + 1;
-    const G  = gaussWeights[i] * gaussFactor + (1 - gaussFactor) * 0.5;
-    const P  = pareto.tier1.includes(num) ? paretoT1
-              : pareto.tier2.includes(num) ? 1.5
-              : pareto.tier3.includes(num) ? 0.7 : 1.0;
-    const F  = FIBONACCI_NUMBERS.includes(num) ? fibFactor : 1.0;
-    const Gd = goldenCandidates.includes(num) ? goldenFactor : 1.0;
-    const Py = 1.0 + (PYTHAGOREAN_FREQ[num] / maxPythFreq) * pythFactor;
-    const Q  = 1.0 + (Math.random() - 0.5) * qNoise;
-    // T: composite technical indicator multiplier (MA trend × RSI momentum × Bollinger band × Aroon recency)
-    // When undefined (e.g., inside backtestStrategies), defaults to 1.0 (no effect) for clean comparison.
-    const T  = technicalScores ? technicalScores[i].compositeBoost : 1.0;
-    return Math.max(0.01, G * P * F * Gd * Py * Q * T);
+    const tech = technicalScores?.[i];
+    const hybrid = tech?.hybridCompositeScore ?? 50;
+    const meanReversion = tech?.meanReversionScore ?? 50;
+    const trend = tech?.trendScore ?? 50;
+    const confirmation = tech?.confirmationScore ?? 50;
+    const baseWeight = 0.2 + Math.pow(hybrid / 100, 1.9) * 3.4;
+    const meanBoost = 0.92 + (meanReversion / 100) * 0.14;
+    const trendBoost = 0.94 + (trend / 100) * 0.10;
+    const confirmBoost = 0.94 + (confirmation / 100) * 0.12;
+    const coldBoost = tech && tech.zScore < -0.5 ? 1.06 : 1.0;
+    const Q = 1.0 + (Math.random() - 0.5) * qNoise;
+    return Math.max(0.01, baseWeight * meanBoost * trendBoost * confirmBoost * coldBoost * Q);
   });
 }
 
@@ -1063,22 +1217,13 @@ function buildSelectionReason(
   const sum = numbers.reduce((a, b) => a + b, 0);
   const oddCount = numbers.filter(n => n % 2 !== 0).length;
   const highCount = numbers.filter(n => n > 22).length;
-  const fibInSet = numbers.filter(n => FIBONACCI_NUMBERS.includes(n));
-  const goldenInSet = numbers.filter(n => goldenCandidates.includes(n));
-  const paretoT1 = numbers.filter(n => pareto.tier1.includes(n));
-  const paretoT3 = numbers.filter(n => pareto.tier3.includes(n));
-  const pythInSet = numbers.filter(n => PYTHAGOREAN_FREQ[n] > 2);
-  const reasons: string[] = [];
-  if (fibInSet.length > 0) reasons.push(`피보나치 수열 [${fibInSet.join(',')}]`);
-  if (goldenInSet.length > 0) reasons.push(`황금비(φ) 파생 [${goldenInSet.join(',')}]`);
-  if (paretoT1.length >= 2) reasons.push(`Pareto Top-20% Hot ${paretoT1.length}개`);
-  if (paretoT3.length > 0) reasons.push(`Pareto 역추적 Cold ${paretoT3.length}개`);
-  if (Math.abs(oddCount - whitson.targetOdd) <= 1) reasons.push(`Whitson 홀짝 패턴(${oddCount}:${6 - oddCount}) 일치`);
-  if (pythInSet.length >= 2) reasons.push(`피타고라스 구조 수 [${pythInSet.join(',')}]`);
+  const decadeSpread = [0, 0, 0, 0, 0];
+  numbers.forEach(n => { decadeSpread[Math.min(Math.floor((n - 1) / 10), 4)]++; });
+  const spreadPattern = decadeSpread.filter(Boolean).join('-');
   return {
-    stage1_modelDesign: '피타고라스 비율 구조 · 피보나치/황금비 · 가우스 정규분포 · Pareto 80/20 · Whitson 패턴 반복 · 양자 요동 노이즈 · Z-Score · 동반출현 · MA빈도추세 · RSI빈도모멘텀 · 볼린저밴드 · Aroon갭재귀 — 12종 기법 통합 확률 최적화 모델',
-    stage2_calcLogic: `W(n) = G(μ,σ) × P(파레토 Tier) × F(피보나치 ${fibInSet.length > 0 ? '✓' : '-'}) × φ(황금비 ${goldenInSet.length > 0 ? '✓' : '-'}) × Py(피타고라스) × Q(양자노이즈) × Z(Z-Score) × C(동반출현) × T(MA×RSI×BB×Aroon) → 룰렛 휠 가중 샘플링 → Python 6종 필터 검증`,
-    stage3_setReason: `합계 ${sum} | 홀짝 ${oddCount}:${6 - oddCount} | 고저 ${highCount}:${6 - highCount} | ${reasons.length > 0 ? reasons.join(' · ') : '가우스 분포 중심 기반 균형 조합'}`,
+    stage1_modelDesign: '팩터 기반 하이브리드 전략: Z-Score 장기 편차 + RSI/Bollinger 평균 회귀 + EMA/MACD 추세 + ADX/ATR 확인 지표를 결합한 6지표 핵심 모델',
+    stage2_calcLogic: 'Score(n) = 0.25*Z + 0.30*MeanReversion(RSI+BB) + 0.25*Trend(EMA+MACD) + 0.20*Confirmation(ADX+ATR+Gap) → 상위 후보군 압축 → 동반출현/필터 검증 → 최종 6개 선정',
+    stage3_setReason: `합계 ${sum} | 홀짝 ${oddCount}:${6 - oddCount} | 고저 ${highCount}:${6 - highCount} | 구간 분산 ${spreadPattern} | Whitson 목표 ${whitson.targetOdd}:${6 - whitson.targetOdd}`,
   };
 }
 
@@ -1151,143 +1296,147 @@ export async function backtestStrategies(
   testRounds = 52,
   predictionsPerRound = 25
 ): Promise<StrategyAnalysis> {
-  const RANDOM_BASELINE = 2.38; // 이론적 무작위 기준선 (%)
-  const rounds = Math.min(testRounds, allData.length - 30);
-
-  // 훈련 데이터: 테스트 기간 이전 데이터만 사용 (데이터 누수 방지)
-  const trainingData = allData.slice(rounds);
-  if (trainingData.length < 20) {
-    throw new Error('분석에 필요한 데이터가 부족합니다 (최소 30회차 이상 필요)');
+  const RANDOM_BASELINE = 2.38;
+  const rounds = Math.min(testRounds, allData.length - 80);
+  if (rounds < 20) {
+    throw new Error('분석에 필요한 데이터가 부족합니다 (최소 100회차 이상 필요)');
   }
 
-  const baseStats = analyzeLotto(trainingData);
-  const baseWhitson = analyzeWhitsonPattern(trainingData);
-  const countMatches = (pred: number[], actual: number[]) => pred.filter(n => actual.includes(n)).length;
-
-  // 단일 전략 백테스트 실행기
-  const runTest = (generatorFn: (s: LottoStats, w: WhitsonPattern) => number[]) => {
-    let totalMatches = 0, hit2 = 0, hit3 = 0;
-    const total = rounds * predictionsPerRound;
-    for (let i = 0; i < rounds; i++) {
-      const targetNums = allData[i].numbers;
-      for (let p = 0; p < predictionsPerRound; p++) {
-        const pred = generatorFn(baseStats, baseWhitson);
-        const m = countMatches(pred, targetNums);
-        totalMatches += m;
-        if (m >= 2) hit2++;
-        if (m >= 3) hit3++;
-      }
-    }
-    return { avgMatches: totalMatches / total, hit2Rate: (hit2 / total) * 100, hit3Rate: (hit3 / total) * 100 };
+  type FactorWeights = {
+    z: number;
+    meanReversion: number;
+    trend: number;
+    confirmation: number;
   };
 
-  // 6종 개별 전략 테스트
-  const strategies: Array<{ name: string; key: string; fn: (s: LottoStats, w: WhitsonPattern) => number[] }> = [
-    { name: '가우스 정규분포',    key: 'gaussian',    fn: (s) => strategyGaussian(s) },
-    { name: '피보나치/황금비(φ)', key: 'fibonacci',   fn: (s) => strategyFibonacci(s) },
-    { name: '피타고라스 수열',    key: 'pythagorean', fn: ()  => strategyPythagorean() },
-    { name: 'Pareto 80/20',       key: 'pareto',      fn: (s) => strategyPareto(s) },
-    { name: 'Whitson 패턴법칙',   key: 'whitson',     fn: (s, w) => strategyWhitson(s, w) },
-    { name: '양자 요동 노이즈',   key: 'quantum',     fn: (s) => strategyQuantum(s) },
+  const configCandidates: HybridStrategyConfig[] = [
+    { ...DEFAULT_HYBRID_CONFIG },
+    { ...DEFAULT_HYBRID_CONFIG, emaShortWindow: 6, emaLongWindow: 13, rsiWindow: 14, adxWindow: 12 },
+    { ...DEFAULT_HYBRID_CONFIG, emaShortWindow: 4, emaLongWindow: 11, macdFast: 6, macdSlow: 15, macdSignal: 5, rsiWindow: 16, bbWindow: 18, adxWindow: 12, atrWindow: 10 },
+    { ...DEFAULT_HYBRID_CONFIG, emaShortWindow: 5, emaLongWindow: 13, rsiWindow: 14, atrWindow: 10, zWeight: 0.20, meanReversionWeight: 0.32, trendWeight: 0.28, confirmationWeight: 0.20 },
   ];
 
-  const individualResults: StrategyTestResult[] = strategies.map(strategy => {
-    const result = runTest(strategy.fn);
+  const buildRankedNumbers = (training: LottoResult[], cfg: HybridStrategyConfig, factorWeights: FactorWeights): number[] => {
+    const table = buildTechnicalWeights(training, cfg)
+      .map(entry => ({
+        number: entry.number,
+        score:
+          entry.zSubScore * factorWeights.z +
+          entry.meanReversionScore * factorWeights.meanReversion +
+          entry.trendScore * factorWeights.trend +
+          entry.confirmationScore * factorWeights.confirmation,
+      }))
+      .sort((a, b) => b.score - a.score || a.number - b.number);
+    return table.map(entry => entry.number);
+  };
+
+  const evaluateApproach = (cfg: HybridStrategyConfig, factorWeights: FactorWeights) => {
+    let totalMatches = 0;
+    let totalTop12Matches = 0;
+    let hit2 = 0;
+    let hit3 = 0;
+    for (let i = 0; i < rounds; i++) {
+      const training = allData.slice(i + 1);
+      const ranked = buildRankedNumbers(training, cfg, factorWeights);
+      const actual = allData[i].numbers;
+      const hitCount = ranked.slice(0, 6).filter(n => actual.includes(n)).length;
+      const hitCount12 = ranked.slice(0, 12).filter(n => actual.includes(n)).length;
+      totalMatches += hitCount;
+      totalTop12Matches += hitCount12;
+      if (hitCount >= 2) hit2++;
+      if (hitCount >= 3) hit3++;
+    }
+    const avgMatches = totalMatches / rounds;
+    const hit2Rate = (hit2 / rounds) * 100;
+    const hit3Rate = (hit3 / rounds) * 100;
+    const avgTop12Matches = totalTop12Matches / rounds;
+    const objective = avgMatches * 100 + avgTop12Matches * 18 + hit3Rate * 1.5 + hit2Rate * 0.4;
+    return { avgMatches, avgTop12Matches, hit2Rate, hit3Rate, objective };
+  };
+
+  const factorProfiles: Array<{ name: string; key: string; weights: FactorWeights }> = [
+    { name: '장기 편차(Z-Score)', key: 'z', weights: { z: 1, meanReversion: 0, trend: 0, confirmation: 0 } },
+    { name: '평균 회귀(RSI+BB)', key: 'mean_reversion', weights: { z: 0.15, meanReversion: 0.85, trend: 0, confirmation: 0 } },
+    { name: '추세(EMA+MACD)', key: 'trend', weights: { z: 0.10, meanReversion: 0, trend: 0.90, confirmation: 0 } },
+    { name: '확인(ADX+ATR)', key: 'confirmation', weights: { z: 0.10, meanReversion: 0, trend: 0.10, confirmation: 0.80 } },
+  ];
+
+  const comboProfiles: Array<{ label: string; strategies: string[]; weights: FactorWeights }> = [
+    { label: '2전략 병합 (Z + 평균 회귀)', strategies: ['장기 편차', '평균 회귀'], weights: { z: 0.45, meanReversion: 0.55, trend: 0, confirmation: 0 } },
+    { label: '3전략 병합 (+ 추세)', strategies: ['장기 편차', '평균 회귀', '추세'], weights: { z: 0.25, meanReversion: 0.35, trend: 0.40, confirmation: 0 } },
+    { label: '4전략 병합 (+ 확인)', strategies: ['장기 편차', '평균 회귀', '추세', '확인'], weights: { z: 0.22, meanReversion: 0.30, trend: 0.25, confirmation: 0.23 } },
+    { label: '5전략 병합 (확인 강화)', strategies: ['장기 편차', '평균 회귀', '추세', '확인 강화'], weights: { z: 0.20, meanReversion: 0.30, trend: 0.23, confirmation: 0.27 } },
+    { label: '6전략 병합 (균형형)', strategies: ['전체 팩터 균형'], weights: { z: 0.25, meanReversion: 0.28, trend: 0.24, confirmation: 0.23 } },
+  ];
+
+  const configScores = configCandidates.map(cfg => ({
+    cfg,
+    result: evaluateApproach(cfg, {
+      z: cfg.zWeight,
+      meanReversion: cfg.meanReversionWeight,
+      trend: cfg.trendWeight,
+      confirmation: cfg.confirmationWeight,
+    }),
+  })).sort((a, b) => b.result.objective - a.result.objective);
+
+  const bestConfig = configScores[0].cfg;
+  const individualResults: StrategyTestResult[] = factorProfiles.map(profile => {
+    const result = evaluateApproach(bestConfig, profile.weights);
     const improvement = ((result.hit3Rate - RANDOM_BASELINE) / RANDOM_BASELINE) * 100;
     const grade: StrategyTestResult['grade'] =
       improvement > 60 ? 'S' : improvement > 25 ? 'A' : improvement > 0 ? 'B' : improvement > -20 ? 'C' : 'D';
-    return { name: strategy.name, key: strategy.key, ...result, improvement, grade };
+    return {
+      name: profile.name,
+      key: profile.key,
+      avgMatches: result.avgMatches,
+      hit2Rate: result.hit2Rate,
+      hit3Rate: result.hit3Rate,
+      improvement,
+      grade,
+    };
+  }).sort((a, b) => b.hit3Rate - a.hit3Rate || b.avgMatches - a.avgMatches);
+
+  const comboResults = comboProfiles.map(profile => {
+    const result = evaluateApproach(bestConfig, profile.weights);
+    return {
+      label: profile.label,
+      strategies: profile.strategies,
+      hit3Rate: result.hit3Rate,
+      improvement: ((result.hit3Rate - RANDOM_BASELINE) / RANDOM_BASELINE) * 100,
+    };
   });
 
-  individualResults.sort((a, b) => b.hit3Rate - a.hit3Rate);
-
-  // 전략별 점수 맵
-  const scoreMap: Record<string, number> = {};
-  individualResults.forEach(r => { scoreMap[r.key] = r.hit3Rate; });
-
-  // 조합 전략 테스트 (Pareto+Gaussian을 핵심으로 단계적 추가)
-  type ComboFlags = { gaussian: boolean; fibonacci: boolean; pythagorean: boolean; pareto: boolean; whitson: boolean; quantum: boolean };
-
-  const buildComboWeights = (flags: ComboFlags) => {
-    const pareto = getParetoTiers(baseStats.hotNumbers, baseStats.coldNumbers);
-    const goldenCands = getGoldenRatioCandidates(Math.round(baseStats.averageSum / 6));
-    const gaussW = flags.gaussian ? buildGaussianWeights(baseStats.frequencies) : null;
-    const maxPyth = Math.max(...Object.values(PYTHAGOREAN_FREQ), 1);
-    return Array.from({ length: 45 }, (_, i) => {
-      const num = i + 1;
-      let w = 1.0;
-      if (flags.gaussian && gaussW) w *= (gaussW[i] * 2 + 0.3);
-      if (flags.pareto)      w *= pareto.tier1.includes(num) ? 2.5 : pareto.tier2.includes(num) ? 1.5 : pareto.tier3.includes(num) ? 0.7 : 1.0;
-      if (flags.fibonacci)   w *= (FIBONACCI_NUMBERS.includes(num) ? 1.4 : 1.0) * (goldenCands.includes(num) ? 1.6 : 1.0);
-      if (flags.pythagorean) w *= 1.0 + (PYTHAGOREAN_FREQ[num] / maxPyth) * 0.4;
-      if (flags.quantum)     w *= 1.0 + (Math.random() - 0.5) * 0.3;
-      return Math.max(0.01, w);
-    });
+  const hybridWeights: FactorWeights = {
+    z: bestConfig.zWeight,
+    meanReversion: bestConfig.meanReversionWeight,
+    trend: bestConfig.trendWeight,
+    confirmation: bestConfig.confirmationWeight,
   };
-
-  const runComboTest = (flags: ComboFlags) => {
-    let totalMatches = 0, hit2 = 0, hit3 = 0;
-    const total = rounds * predictionsPerRound;
-    for (let i = 0; i < rounds; i++) {
-      const targetNums = allData[i].numbers;
-      for (let p = 0; p < predictionsPerRound; p++) {
-        const weights = buildComboWeights(flags);
-        let pred = weightedRandomSelect(weights, 6);
-        // Whitson 필터 (활성화 시 최대 50회 재시도)
-        if (flags.whitson) {
-          for (let attempt = 0; attempt < 50; attempt++) {
-            const odd = pred.filter(n => n % 2 !== 0).length;
-            const sum = pred.reduce((a, b) => a + b, 0);
-            if (Math.abs(odd - baseWhitson.targetOdd) <= 1 && sum >= baseWhitson.sumMin && sum <= baseWhitson.sumMax) break;
-            pred = weightedRandomSelect(buildComboWeights(flags), 6);
-          }
-        }
-        const m = countMatches(pred, targetNums);
-        totalMatches += m;
-        if (m >= 2) hit2++;
-        if (m >= 3) hit3++;
-      }
-    }
-    return { avgMatches: totalMatches / total, hit2Rate: (hit2 / total) * 100, hit3Rate: (hit3 / total) * 100 };
-  };
-
-  const comboDefs = [
-    { label: '2전략 병합 (Pareto + 가우스)', strategies: ['Pareto 80/20', '가우스 정규분포'], flags: { gaussian: true, fibonacci: false, pythagorean: false, pareto: true, whitson: false, quantum: false } },
-    { label: '3전략 병합 (+ Whitson)', strategies: ['Pareto 80/20', '가우스 정규분포', 'Whitson 패턴법칙'], flags: { gaussian: true, fibonacci: false, pythagorean: false, pareto: true, whitson: true, quantum: false } },
-    { label: '4전략 병합 (+ 피타고라스)', strategies: ['Pareto 80/20', '가우스 정규분포', 'Whitson', '피타고라스'], flags: { gaussian: true, fibonacci: false, pythagorean: true, pareto: true, whitson: true, quantum: false } },
-    { label: '5전략 병합 (+ 양자요동)', strategies: ['Pareto', '가우스', 'Whitson', '피타고라스', '양자요동'], flags: { gaussian: true, fibonacci: false, pythagorean: true, pareto: true, whitson: true, quantum: true } },
-    { label: '6전략 병합 (전체)', strategies: ['전체 6종'], flags: { gaussian: true, fibonacci: true, pythagorean: true, pareto: true, whitson: true, quantum: true } },
-  ];
-
-  const comboResults = comboDefs.map(def => {
-    const result = runComboTest(def.flags as ComboFlags);
-    const improvement = ((result.hit3Rate - RANDOM_BASELINE) / RANDOM_BASELINE) * 100;
-    return { label: def.label, strategies: def.strategies, hit3Rate: result.hit3Rate, improvement };
-  });
-
-  // 하이브리드: 개별 점수를 지수로 사용한 동적 가중치
-  const hybridResult = runComboTest({
-    gaussian: true, fibonacci: scoreMap['fibonacci'] > RANDOM_BASELINE,
-    pythagorean: scoreMap['pythagorean'] > RANDOM_BASELINE,
-    pareto: true, whitson: scoreMap['whitson'] > RANDOM_BASELINE,
-    quantum: true,
-  });
-
-  // 최적화 가중치 계산
-  const norm = (key: string, defaultVal: number, min: number, max: number) => {
-    const ratio = (scoreMap[key] ?? RANDOM_BASELINE) / RANDOM_BASELINE;
-    return Math.max(min, Math.min(max, defaultVal * ratio));
-  };
+  const hybridResult = evaluateApproach(bestConfig, hybridWeights);
 
   const optimizedWeights: OptimizedWeights = {
-    gaussianFactor:      norm('gaussian',    1.0, 0.5, 2.0),
-    fibonacciFactor:     norm('fibonacci',   1.4, 0.8, 2.0),
-    goldenRatioFactor:   norm('fibonacci',   1.6, 0.9, 2.4),
-    pythagoreanFactor:   norm('pythagorean', 0.4, 0.1, 0.8),
-    paretoTier1Factor:   norm('pareto',      2.5, 1.5, 4.0),
-    quantumNoiseFactor:  norm('quantum',     0.3, 0.1, 0.5),
-    quantumSigma:        2,   // 양자 파라미터 최적화에서 별도 결정됨
-    whitsonFilterEnabled: (scoreMap['whitson'] ?? 0) >= RANDOM_BASELINE,
+    gaussianFactor: 1,
+    fibonacciFactor: 1,
+    goldenRatioFactor: 1,
+    pythagoreanFactor: 1,
+    paretoTier1Factor: 1,
+    quantumNoiseFactor: 0.12,
+    quantumSigma: 1,
+    whitsonFilterEnabled: true,
+    emaShortWindow: bestConfig.emaShortWindow,
+    emaLongWindow: bestConfig.emaLongWindow,
+    macdFast: bestConfig.macdFast,
+    macdSlow: bestConfig.macdSlow,
+    macdSignal: bestConfig.macdSignal,
+    rsiWindow: bestConfig.rsiWindow,
+    bbWindow: bestConfig.bbWindow,
+    aroonWindow: bestConfig.aroonWindow,
+    adxWindow: bestConfig.adxWindow,
+    atrWindow: bestConfig.atrWindow,
+    zWeight: bestConfig.zWeight,
+    meanReversionWeight: bestConfig.meanReversionWeight,
+    trendWeight: bestConfig.trendWeight,
+    confirmationWeight: bestConfig.confirmationWeight,
   };
 
   const approachScores = {
@@ -1302,17 +1451,18 @@ export async function backtestStrategies(
 
   const maxScore = Math.max(...Object.values(approachScores));
   const bestApproach =
-    maxScore === approachScores.hybrid    ? '팩터 하이브리드 전략' :
-    maxScore === approachScores.singleBest ? `단일 전략 (${individualResults[0].name})` :
-    maxScore === approachScores.combo6    ? '6전략 전체 병합' :
-    maxScore === approachScores.combo5    ? '5전략 병합' :
-    maxScore === approachScores.combo4    ? '4전략 병합' :
-    maxScore === approachScores.combo3    ? '3전략 병합' : '2전략 병합';
+    maxScore === approachScores.hybrid ? '팩터 기반 하이브리드' :
+    maxScore === approachScores.combo6 ? '균형형 병합' :
+    maxScore === approachScores.combo5 ? '확인 강화 병합' :
+    maxScore === approachScores.combo4 ? '4팩터 병합' :
+    maxScore === approachScores.combo3 ? '3팩터 병합' :
+    maxScore === approachScores.combo2 ? '2팩터 병합' :
+    `단일 전략 (${individualResults[0].name})`;
 
   const recommendation =
-    `"${bestApproach}"이 최고 3+매치율 ${maxScore.toFixed(2)}%를 달성했습니다 ` +
-    `(무작위 기준선 ${RANDOM_BASELINE}% 대비 ${((maxScore / RANDOM_BASELINE - 1) * 100).toFixed(0)}% 향상). ` +
-    `최적화 가중치가 양자 변동 엔진에 자동 적용되었습니다.`;
+    `"${bestApproach}"이 최근 ${rounds}회 롤링 백테스트에서 3개+ 일치율 ${maxScore.toFixed(2)}%, ` +
+    `상위 6개 평균 적중 ${hybridResult.avgMatches.toFixed(2)}개를 기록했습니다. ` +
+    `최적 설정은 EMA(${bestConfig.emaShortWindow}/${bestConfig.emaLongWindow}) · MACD(${bestConfig.macdFast}/${bestConfig.macdSlow}/${bestConfig.macdSignal}) · RSI(${bestConfig.rsiWindow}) · BB(${bestConfig.bbWindow}) · ADX(${bestConfig.adxWindow}) · ATR(${bestConfig.atrWindow})입니다.`;
 
   return {
     individual: individualResults,
@@ -1380,12 +1530,12 @@ export function generateQuantumFlux(
   //   RSI       → appearance-momentum ratio (over/under-represented recently)
   //   Bollinger → cross-sectional frequency band deviation across all 45 numbers
   //   Aroon     → gap-recency oscillator (how recently vs how long since drought)
-  const technicalScores = buildTechnicalWeights(results);
+  const technicalScores = buildTechnicalWeights(results, opts);
 
   const methodLabels = [
-    '피타고라스 비율', '피보나치/황금비(φ)', '가우스 정규분포', 'Pareto 80/20',
-    'Whitson 패턴법칙', '양자 요동 노이즈', 'Z-Score 보정', '동반출현(Co-Occurrence) 시너지',
-    'MA 빈도추세(이동평균)', 'RSI 빈도모멘텀', '볼린저밴드 횡단면편차', 'Aroon 갭재귀지표',
+    '팩터 기반 하이브리드', 'Z-Score 장기 편차', 'EMA/MACD 추세', 'RSI 평균회귀',
+    '볼린저밴드 횡단면편차', 'ADX/ATR 확인 필터', '동반출현(Co-Occurrence) 시너지',
+    '양자 요동 노이즈',
   ];
   const optimizedTag = opts ? ['[최적화 가중치 적용]'] : [];
 
@@ -1419,6 +1569,9 @@ export function generateQuantumFlux(
       const z = zScores[i + 1];
       if (z > 1.5) weights[i] *= 0.85; // 너무 많이 나온 번호는 억제
       else if (z < -1.5) weights[i] *= 1.15; // 너무 안 나온 번호는 약간의 가산점 (회귀 기대)
+      const hybridScore = technicalScores[i]?.hybridCompositeScore ?? 50;
+      if (hybridScore >= 65) weights[i] *= 1.18;
+      else if (hybridScore < 45) weights[i] *= 0.38;
     }
 
     let candidates: number[];
@@ -1526,26 +1679,13 @@ export async function optimizeQuantumParameters(
   const baseStats = analyzeLotto(trainingData);
   const basePareto = getParetoTiers(baseStats.hotNumbers, baseStats.coldNumbers);
   const baseGolden = getGoldenRatioCandidates(Math.round(baseStats.averageSum / 6));
-  const maxPythFreq = Math.max(...Object.values(PYTHAGOREAN_FREQ), 1);
+  const baseTechnical = buildTechnicalWeights(trainingData, DEFAULT_HYBRID_CONFIG);
 
   const countMatches = (pred: number[], actual: number[]) => pred.filter(n => actual.includes(n)).length;
 
   // --- 공통 가중치 생성 (qNoise 주입용) ---
   const makeWeights = (qNoise: number): number[] => {
-    const gaussW = buildGaussianWeights(baseStats.frequencies);
-    return Array.from({ length: 45 }, (_, i) => {
-      const num = i + 1;
-      const G  = gaussW[i];
-      const P  = basePareto.tier1.includes(num) ? 2.5
-               : basePareto.tier2.includes(num) ? 1.5
-               : basePareto.tier3.includes(num) ? 0.7 : 1.0;
-      const F  = FIBONACCI_NUMBERS.includes(num) ? 1.4 : 1.0;
-      const Gd = baseGolden.includes(num) ? 1.6 : 1.0;
-      const Py = 1.0 + (PYTHAGOREAN_FREQ[num] / maxPythFreq) * 0.4;
-      // ← 여기가 최적화 대상: qNoise 값에 따라 Q 교란 크기가 달라짐
-      const Q  = 1.0 + (Math.random() - 0.5) * qNoise;
-      return Math.max(0.01, G * P * F * Gd * Py * Q);
-    });
+    return buildCombinedWeights(baseStats, baseGolden, basePareto, { ...DEFAULT_HYBRID_CONFIG, quantumNoiseFactor: qNoise, quantumSigma: CURRENT_SIGMA, gaussianFactor: 1, fibonacciFactor: 1, goldenRatioFactor: 1, pythagoreanFactor: 1, paretoTier1Factor: 1, whitsonFilterEnabled: true }, baseTechnical);
   };
 
   // --- qNoise 그리드 탐색 ---
