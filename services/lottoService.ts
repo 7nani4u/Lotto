@@ -1018,6 +1018,238 @@ export function buildFullAnalysisTable(results: LottoResult[]): FullIndicatorAna
 }
 
 // ==========================================
+// 4.7. FUSED RANKING + FLOW DETAIL (사이트 표식용)
+// ==========================================
+//
+// Python lotto_technical_indicators.py §5-7 융합과 동일한 정의:
+//   flow(n)  = (연결강도 + 대기초과(2.0 상한→0~100) + 추세매핑) / 3
+//   fused(n) = (1−w) × composite + w × flow   (기본 w=0.25)
+// 티어: 융합순위 1~6 확정 / 7~12 차순 / 40~45 회피 / 나머지 중립,
+//       |앙상블순위 − 융합순위| ≥ 10 이면 의견분열(contested).
+// 사이트 합의 분모는 5 (FullIndicatorAnalysis가 5종 서브점수만 보유하므로
+// Python의 11종 합의와 분모가 다름 — UI 범례에 명시).
+// 추세·갭·복귀 판정은 Python과 동일 임계값으로 통일 (기존 사이트 인라인
+// 계산과 임계값이 달랐던 부분을 여기로 일원화).
+// ==========================================
+
+export const FLOW_WEIGHT_DEFAULT = 0.25;
+
+export const FLOW_TREND_SCORES: Record<string, number> = {
+  '급락': 100, '하락': 75, '안정': 50, '상승': 35, '급등': 20, '데이터부족': 50,
+};
+
+export function classifyFlowTrend(r5: number, rp5: number): string {
+  // Python _flow_trend_all() 과 동일 임계값.
+  // (기존 사이트 인라인식은 r5>=0.8→상승, r5<0.4→하락으로 달라 같은 데이터에
+  // 다른 라벨을 붙였음 — 여기로 통일.)
+  if (r5 < 0.4 && rp5 >= 0.8) return '급락';
+  if (r5 > 1.6 && rp5 < 0.5)  return '급등';
+  if (r5 > 1.4 && rp5 > 1.0)  return '상승';
+  if (r5 < 0.4 && rp5 < 0.5)  return '하락';
+  return '안정';
+}
+
+export function classifySegmentTrend(rr5: number, rp5: number): string {
+  // Python _segment_flow_all() 과 동일 비율 규칙.
+  // (기존 사이트는 절대차 |diff|>1 규칙이라 5개짜리 41~45 구간에 불리했음.)
+  if (rr5 > rp5 * 1.3) return '상승';
+  if (rr5 < rp5 * 0.7) return '하락';
+  return '안정';
+}
+
+export interface GapDetail {
+  curGap: number;
+  avgGap: number;
+  overdueRatio: number;
+  isPeriodic: boolean;
+}
+
+export function buildGapInfo(results: LottoResult[], historyCap = 80): Record<number, GapDetail> {
+  // Python _gap_analysis_all() 과 동일: 최근 historyCap회 기준 출현 간격 통계.
+  // 주기성 기준은 변동계수 < 0.35 (기존 사이트 0.5와 다름 — 여기로 통일).
+  const history = Math.min(historyCap, results.length);
+  const appearsAt = (idx: number, n: number) => {
+    const d = results[idx];
+    return d.numbers.includes(n) || d.bonus === n;
+  };
+  const info = {} as Record<number, GapDetail>;
+  for (let n = 1; n <= 45; n++) {
+    const idx: number[] = [];
+    for (let i = 0; i < history; i++) if (appearsAt(i, n)) idx.push(i);
+    const curGap = idx.length > 0 ? idx[0] : history;
+    const gaps: number[] = [];
+    for (let i = 0; i + 1 < idx.length; i++) gaps.push(idx[i + 1] - idx[i]);
+    const avgGap = gaps.length > 0
+      ? gaps.reduce((a, b) => a + b, 0) / gaps.length
+      : 45 / 7;
+    const stdGap = gaps.length >= 2
+      ? Math.sqrt(gaps.reduce((s, g) => s + (g - avgGap) ** 2, 0) / gaps.length)
+      : avgGap;
+    const cv = avgGap > 0 ? stdGap / avgGap : 1;
+    info[n] = {
+      curGap,
+      avgGap: +avgGap.toFixed(1),
+      overdueRatio: +(avgGap > 0 ? curGap / avgGap : 0).toFixed(2),
+      isPeriodic: cv < 0.35,
+    };
+  }
+  return info;
+}
+
+export function buildConnectionScores(results: LottoResult[], window = 60): Record<number, number> {
+  // Python _connection_scores_all() 과 동일:
+  // 45×45 전이행렬(7개 번호 기준) + 최근 6회차 가중 조회 후 0~100 정규화.
+  const w = Math.min(window, results.length);
+  const out = {} as Record<number, number>;
+  if (w < 10) { for (let n = 1; n <= 45; n++) out[n] = 50; return out; }
+  const nums = (d: LottoResult) => [...d.numbers, d.bonus];
+  const T: number[][] = Array.from({ length: 46 }, () => new Array<number>(46).fill(0));
+  for (let i = 0; i < w - 1; i++) {
+    const prev = nums(results[i + 1]);
+    const cur = nums(results[i]);
+    for (const p of prev) for (const c of cur) T[p][c]++;
+  }
+  const raw = {} as Record<number, number>;
+  for (let n = 1; n <= 45; n++) raw[n] = 0;
+  for (let lag = 0; lag < Math.min(6, results.length); lag++) {
+    const weight = 2 / (lag + 1);
+    for (const p of nums(results[lag])) {
+      const row = T[p];
+      for (let c = 1; c <= 45; c++) raw[c] += row[c] * weight;
+    }
+  }
+  const vals = Object.values(raw);
+  const lo = Math.min(...vals);
+  const hi = Math.max(...vals);
+  const span = hi - lo > 0 ? hi - lo : 1;
+  for (let n = 1; n <= 45; n++) out[n] = +(((raw[n] - lo) / span) * 100).toFixed(1);
+  return out;
+}
+
+export interface FlowSignals {
+  trends: Record<number, string>;
+  gapInfo: Record<number, GapDetail>;
+  connectionScores: Record<number, number>;
+  flowScores: Record<number, number>;
+}
+
+export function buildFlowSignals(results: LottoResult[]): FlowSignals | null {
+  // 10회차 미만이면 Python과 동일하게 추세 판단 보류(null).
+  if (results.length < 10) return null;
+  const exp5 = (5 * 7) / 45;
+  const appears = (d: LottoResult, n: number) => d.numbers.includes(n) || d.bonus === n;
+  const trends = {} as Record<number, string>;
+  for (let n = 1; n <= 45; n++) {
+    const f5 = results.slice(0, 5).filter(d => appears(d, n)).length;
+    const p5 = results.slice(5, 10).filter(d => appears(d, n)).length;
+    trends[n] = classifyFlowTrend(f5 / exp5, p5 / exp5);
+  }
+  const gapInfo = buildGapInfo(results);
+  const connectionScores = buildConnectionScores(results);
+  const flowScores = {} as Record<number, number>;
+  for (let n = 1; n <= 45; n++) {
+    const overdue = Math.min(gapInfo[n].curGap / (gapInfo[n].avgGap || 1), 2) / 2 * 100;
+    flowScores[n] = +((connectionScores[n] + overdue + (FLOW_TREND_SCORES[trends[n]] ?? 50)) / 3).toFixed(1);
+  }
+  return { trends, gapInfo, connectionScores, flowScores };
+}
+
+export function classifyRecentlyBack(results: LottoResult[]): number[] {
+  // Python compute_flow_analysis() 와 동일: 최근 3회 내 출현 + 그 이전 5회 이상 공백.
+  // (기존 사이트식은 평균간격 기반 다른 정의였음 — 여기로 통일.)
+  const appears = (d: LottoResult, n: number) => d.numbers.includes(n) || d.bonus === n;
+  const back: number[] = [];
+  for (let n = 1; n <= 45; n++) {
+    if (!results.slice(0, 3).some(d => appears(d, n))) continue;
+    let absent = 0;
+    for (let i = 3; i < Math.min(23, results.length); i++) {
+      if (appears(results[i], n)) break;
+      absent++;
+    }
+    if (absent >= 5) back.push(n);
+  }
+  return back;
+}
+
+export type TierKey = 'pick' | 'next' | 'avoid' | 'mid';
+
+export interface FusedRow {
+  number: number;
+  compositeScore: number;
+  ensRank: number;
+  fusedScore: number;
+  fusedRank: number;
+  agreement5: number;       // 5종 서브점수 중 65점 이상 개수
+  stability: number | null; // 0~1 재현율, 미측정 시 null
+  tier: TierKey;
+  contested: boolean;       // |ensRank − fusedRank| ≥ 10
+}
+
+export function buildFusedTable(
+  table: FullIndicatorAnalysis[],
+  flow: FlowSignals | null,
+  flowWeight: number = FLOW_WEIGHT_DEFAULT,
+  stability: Record<number, number> | null = null,
+): FusedRow[] {
+  const w = Math.max(0, Math.min(1, flowWeight));
+  const byNum = new Map(table.map(t => [t.number, t]));
+  const rows: FusedRow[] = [];
+  for (let n = 1; n <= 45; n++) {
+    const t = byNum.get(n);
+    if (!t) continue;
+    const fl = flow?.flowScores[n] ?? 50;
+    rows.push({
+      number: n,
+      compositeScore: t.compositeScore,
+      ensRank: t.rank,
+      fusedScore: +((1 - w) * t.compositeScore + w * fl).toFixed(2),
+      fusedRank: 0,
+      agreement5: [t.zSubScore, t.bbSubScore, t.rsiSubScore, t.maSubScore, t.aroonSubScore]
+        .filter(v => v >= 65).length,
+      stability: stability ? (stability[n] ?? null) : null,
+      tier: 'mid',
+      contested: false,
+    });
+  }
+  rows.sort((a, b) => b.fusedScore - a.fusedScore || a.number - b.number);
+  rows.forEach((r, i) => {
+    r.fusedRank = i + 1;
+    r.tier = r.fusedRank <= 6 ? 'pick' : r.fusedRank <= 12 ? 'next' : r.fusedRank > 39 ? 'avoid' : 'mid';
+    r.contested = Math.abs(r.ensRank - r.fusedRank) >= 10;
+  });
+  return rows;
+}
+
+export function computeStability(
+  results: LottoResult[],
+  iters: number = 10,
+  flowWeight: number = FLOW_WEIGHT_DEFAULT,
+  topk: number = 6,
+  seed: number = 917,
+): Record<number, number> | null {
+  // Python compute_stability() 와 동일: 순서-preserving 80% 서브샘플 ×
+  // 융합 상위 진입율. 30회차 미만이면 null (엔진 최소 윈도우 미달).
+  // 사이트 기본 10회 (Python 20회보다 적음 — 브라우저 부하 고려).
+  if (iters <= 0 || results.length < 30) return null;
+  let s = seed;
+  const rand = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  const m = Math.max(20, Math.floor(results.length * 0.8));
+  const counts = {} as Record<number, number>;
+  for (let n = 1; n <= 45; n++) counts[n] = 0;
+  for (let k = 0; k < iters; k++) {
+    const idx = new Set<number>();
+    while (idx.size < m) idx.add(Math.floor(rand() * results.length));
+    const sub = [...idx].sort((a, b) => a - b).map(i => results[i]);
+    if (sub.length < 10) continue;
+    const fused = buildFusedTable(buildFullAnalysisTable(sub), buildFlowSignals(sub), flowWeight);
+    fused.slice(0, topk).forEach(r => { counts[r.number]++; });
+  }
+  const out = {} as Record<number, number>;
+  for (let n = 1; n <= 45; n++) out[n] = +(counts[n] / iters).toFixed(2);
+  return out;
+}
+
+// ==========================================
 // 5. STRATEGY ANALYSIS TYPES
 // ==========================================
 export interface StrategyTestResult {

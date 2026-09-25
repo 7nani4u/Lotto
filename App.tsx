@@ -9,12 +9,19 @@ import {
   backtestStrategies,
   optimizeQuantumParameters,
   buildFullAnalysisTable,
+  buildFlowSignals,
+  buildFusedTable,
+  computeStability,
+  classifyRecentlyBack,
+  classifySegmentTrend,
+  FLOW_WEIGHT_DEFAULT,
   LottoStats,
   RepeatAnalysis,
   StrategyAnalysis,
   QuantumOptimizationResult,
   OptimizedWeights,
   FullIndicatorAnalysis,
+  FusedRow,
 } from './services/lottoService';
 import { LottoResult, PredictionResult } from './types';
 
@@ -198,46 +205,18 @@ const App: React.FC = () => {
     };
   }, [strategyAnalysis, quantumOptResult, quantumApplied]);
 
-  // ── 번호 흐름 분析: 추세·갭·구간·대기 (allData 변경 시 재계산)
+  // ── 번호 흐름 분석: 추세·갭·구간·대기 + 연결강도·융합 (allData 변경 시 재계산)
+  // 정의 단일화: 추세/갭/복귀/구간 판정은 services/lottoService.ts §4.7
+  // (Python lotto_technical_indicators.py와 동일 임계값). 기존 인라인 계산은
+  // 임계값이 달라 같은 데이터에 다른 라벨을 붙였음.
+  const flowSignals = useMemo(() => buildFlowSignals(allData), [allData]);
+
   const flowAnalysis = useMemo(() => {
-    if (allData.length < 10) return null;
+    if (!flowSignals || allData.length < 10) return null;
     const draws = allData; // index 0 = 가장 최근
+    const { trends, gapInfo, connectionScores, flowScores } = flowSignals;
 
-    // 추세 분류 (급락/급등/상승/하락/안정)
-    const exp5 = (5 * 7) / 45;
-    const trends: Record<number, string> = {};
-    for (let n = 1; n <= 45; n++) {
-      const r5  = draws.slice(0, 5).filter(d => d.numbers.includes(n) || d.bonus === n).length / exp5;
-      const rp5 = draws.slice(5, 10).filter(d => d.numbers.includes(n) || d.bonus === n).length / exp5;
-      if      (r5 < 0.4 && rp5 >= 0.8) trends[n] = '급락';
-      else if (r5 > 1.6 && rp5 < 0.5)  trends[n] = '급등';
-      else if (r5 >= 0.8)               trends[n] = '상승';
-      else if (r5 < 0.4)                trends[n] = '하락';
-      else                              trends[n] = '안정';
-    }
-
-    // 갭 분析 (현재 대기, 평균 간격, 초과율, 주기성)
-    const gapInfo: Record<number, { curGap: number; avgGap: number; overdueRatio: number; isPeriodic: boolean }> = {};
-    for (let n = 1; n <= 45; n++) {
-      const indices: number[] = [];
-      draws.forEach((d, i) => { if (d.numbers.includes(n) || d.bonus === n) indices.push(i); });
-      const curGap = indices.length > 0 ? indices[0] : draws.length;
-      if (indices.length < 2) {
-        gapInfo[n] = { curGap, avgGap: +(45 / 7).toFixed(1), overdueRatio: +(curGap / (45 / 7)).toFixed(2), isPeriodic: false };
-        continue;
-      }
-      const gaps = indices.slice(0, indices.length - 1).map((v, i) => indices[i + 1] - v);
-      const avgGap = gaps.reduce((a, b) => a + b, 0) / gaps.length;
-      const stdGap = Math.sqrt(gaps.reduce((s, g) => s + (g - avgGap) ** 2, 0) / gaps.length);
-      gapInfo[n] = {
-        curGap,
-        avgGap:       +avgGap.toFixed(1),
-        overdueRatio: +(curGap / avgGap).toFixed(2),
-        isPeriodic:   avgGap > 0 && stdGap / avgGap < 0.5,
-      };
-    }
-
-    // 구간별 흐름 (5구간, 최근5 vs 이전5)
+    // 구간별 흐름 (5구간, 최근5 vs 이전5) — 7개 번호 집계 + 비율 규칙 통일
     const segs = [
       { label: '1~10',  lo: 1,  hi: 10 },
       { label: '11~20', lo: 11, hi: 20 },
@@ -250,24 +229,39 @@ const App: React.FC = () => {
         set.reduce((acc, d) => acc + [...d.numbers, d.bonus].filter(n => n >= seg.lo && n <= seg.hi).length, 0);
       const r5 = cnt(draws.slice(0, 5));
       const p5 = cnt(draws.slice(5, 10));
-      const diff = r5 - p5;
-      return { label: seg.label, recent5: r5, prev5: p5, trend: diff > 1 ? '상승' : diff < -1 ? '하락' : '안정' };
+      const exp5 = (5 * 7 * (seg.hi - seg.lo + 1)) / 45;
+      return {
+        label: seg.label, lo: seg.lo, hi: seg.hi,
+        recent5: r5, prev5: p5,
+        trend: classifySegmentTrend(r5 / exp5, p5 / exp5),
+      };
     });
 
     // 장기 대기 번호 (10회차 이상 미출현, 초과율 내림차순)
-    const longAbsent = Object.entries(gapInfo)
-      .filter(([, g]) => g.curGap >= 10)
-      .sort((a, b) => b[1].overdueRatio - a[1].overdueRatio)
+    const longAbsent = Array.from({ length: 45 }, (_, i) => i + 1)
+      .filter(n => gapInfo[n].curGap >= 10)
+      .sort((a, b) => gapInfo[b].overdueRatio - gapInfo[a].overdueRatio)
       .slice(0, 10)
-      .map(([n, g]) => ({ number: Number(n), curGap: g.curGap, overdueRatio: g.overdueRatio, avgGap: g.avgGap }));
+      .map(n => ({ number: n, curGap: gapInfo[n].curGap, overdueRatio: gapInfo[n].overdueRatio, avgGap: gapInfo[n].avgGap }));
 
-    // 최근 복귀 번호 (평균 간격 대비 현재 대기가 매우 짧음)
-    const recentlyBack = Object.entries(gapInfo)
-      .filter(([, g]) => g.avgGap >= 8 && g.curGap < g.avgGap * 0.3)
-      .map(([n]) => Number(n));
+    // 최근 복귀 번호 (최근 3회 내 출현 + 그 이전 5회 이상 공백 — Python과 동일 정의)
+    const recentlyBack = classifyRecentlyBack(allData);
 
-    return { trends, gapInfo, segmentFlow, longAbsent, recentlyBack };
-  }, [allData]);
+    return { trends, gapInfo, segmentFlow, longAbsent, recentlyBack, connectionScores, flowScores };
+  }, [flowSignals, allData]);
+
+  // ── 융합 랭킹 + 안정도 (🏆/📋/🔗 표식의 단일 근거)
+  // fused = (1−w)×종합 + w×흐름, w=0.25. 안정도 = 80% 서브샘플 융합 상위 진입율.
+  const stabilityMap = useMemo(
+    () => computeStability(allData, 10, FLOW_WEIGHT_DEFAULT),
+    [allData],
+  );
+  const fusedTable: FusedRow[] = useMemo(
+    () => (indicatorTable.length > 0
+      ? buildFusedTable(indicatorTable, flowSignals, FLOW_WEIGHT_DEFAULT, stabilityMap)
+      : []),
+    [indicatorTable, flowSignals, stabilityMap],
+  );
 
   const handleGenerateQuantum = async () => {
     if (allData.length === 0 || isGeneratingQuantum) return;
@@ -745,8 +739,28 @@ const App: React.FC = () => {
 
         {/* ══ [1] 출현가능성 상위 6개 번호 + 전체 테이블 ══ */}
         {indicatorTable.length > 0 && (() => {
-          const top6 = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6);
-          const sorted45 = [...indicatorTable].sort((a, b) => a.rank - b.rank);
+          // 선정 기준 = 융합 순위 (종합 75% + 흐름 25%). 표·카드·근거가 같은 순서를 공유.
+          const fused = fusedTable.length > 0
+            ? fusedTable
+            : [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore)
+                .map((t, i) => ({
+                  number: t.number, compositeScore: t.compositeScore, ensRank: t.rank,
+                  fusedScore: t.compositeScore, fusedRank: i + 1, agreement5: 0,
+                  stability: null as number | null, tier: 'mid' as const, contested: false,
+                }));
+          const top6 = fused.slice(0, 6);
+          const byNum = new Map<number, FullIndicatorAnalysis>(
+            indicatorTable.map(t => [t.number, t] as [number, FullIndicatorAnalysis]),
+          );
+          const cutoffGap = fused.length >= 7
+            ? +(fused[5].fusedScore - fused[6].fusedScore).toFixed(3)
+            : NaN;
+          const TIER_BADGE: Record<string, { label: string; cls: string }> = {
+            pick:  { label: '▶ 확정', cls: 'text-emerald-300 bg-emerald-900/50 border border-emerald-700/60' },
+            next:  { label: '◆ 차순', cls: 'text-yellow-300 bg-yellow-900/40 border border-yellow-700/60' },
+            avoid: { label: '✕ 회피', cls: 'text-blue-400 bg-blue-900/30 border border-blue-800/50' },
+            mid:   { label: '· 중립', cls: 'text-gray-500 bg-gray-800/40 border border-gray-700/50' },
+          };
           const getPatObj = (item: FullIndicatorAnalysis) => {
             const { maSignal, rsi } = item;
             if (rsi > 65 && maSignal > 0.015)  return { label: '상승', cls: 'text-red-400 bg-red-900/40 border border-red-800/60' };
@@ -770,30 +784,47 @@ const App: React.FC = () => {
             <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-teal-900/40 mt-8">
               <h2 className="text-lg font-bold text-teal-300 border-b border-gray-700/60 pb-3 mb-5 flex items-center gap-2">
                 <span>🏆</span> 출현가능성 상위 6개 번호
+                <span className="text-xs font-normal text-gray-500 ml-1">융합 순위 (종합 75% + 흐름 25%)</span>
               </h2>
 
-              {/* Top 6 카드 */}
+              {/* Top 6 카드 — 융합 선정 + 티어 표식 */}
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-6">
-                {top6.map((item, idx) => {
+                {top6.map((row, idx) => {
+                  const item = byNum.get(row.number);
+                  if (!item) return null;
+                  const tier = TIER_BADGE[row.tier];
+                  const trend = flowAnalysis?.trends[row.number] ?? '안정';
+                  const gap = flowAnalysis?.gapInfo[row.number];
                   const signals: string[] = [];
                   if (item.zScore < -0.5)         signals.push('저출현 회귀');
                   if (item.rsi < 35)              signals.push('RSI 과소');
                   if (item.bollingerPctB < 0.3)   signals.push('BB 하단');
                   if (item.aroonOscillator < -30)  signals.push('장기 공백');
                   if (item.maSignal < -0.01)      signals.push('MA 냉각');
-                  const borderCls = item.compositeScore >= 65
+                  const borderCls = row.tier === 'pick'
                     ? 'border-emerald-700/60 bg-emerald-950/40'
-                    : item.compositeScore >= 50
+                    : row.tier === 'next'
                       ? 'border-yellow-700/60 bg-yellow-950/30'
                       : 'border-gray-700 bg-gray-900/50';
-                  const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400' : item.compositeScore >= 50 ? 'text-yellow-400' : 'text-gray-300';
+                  const scoreCls = row.fusedScore >= 65 ? 'text-emerald-400' : row.fusedScore >= 50 ? 'text-yellow-400' : 'text-gray-300';
                   return (
-                    <div key={item.number}
+                    <div key={row.number}
                          className={`flex flex-col items-center gap-1.5 rounded-xl border p-3 cursor-pointer hover:scale-105 transition-transform ${borderCls}`}
-                         onClick={() => handleBallClick(item.number)}>
-                      <div className="text-[10px] text-gray-500 font-bold">#{idx + 1}</div>
-                      <Ball num={item.number} small />
-                      <div className={`text-sm font-black ${scoreCls}`}>{item.compositeScore.toFixed(1)}점</div>
+                         onClick={() => handleBallClick(row.number)}
+                         title={`융합 ${row.fusedRank}위 · 종합 ${row.ensRank}위 · 합의 ${row.agreement5}/5${row.contested ? ' · 의견 분열' : ''}`}>
+                      <div className="flex items-center gap-1">
+                        <div className="text-[10px] text-gray-500 font-bold">#{idx + 1}</div>
+                        <span className={`text-[9px] font-bold px-1 py-0.5 rounded whitespace-nowrap ${tier.cls}`}>{tier.label}</span>
+                        {row.contested && (
+                          <span className="text-[9px] font-bold px-1 py-0.5 rounded whitespace-nowrap text-red-300 bg-red-900/50 border border-red-700/60">※</span>
+                        )}
+                      </div>
+                      <Ball num={row.number} small />
+                      <div className={`text-sm font-black ${scoreCls}`}>{row.fusedScore.toFixed(1)}점</div>
+                      <div className="text-[9px] text-gray-500">종합 {row.compositeScore.toFixed(1)} · {trend}{gap ? ` · ${gap.curGap}회 대기` : ''}</div>
+                      <div className="text-[9px] text-gray-500">
+                        합의 {row.agreement5}/5 · 안정 {row.stability === null ? '─' : `${Math.round(row.stability * 100)}%`}
+                      </div>
                       {/* 5종 지표 서브점수 미니바 */}
                       <div className="w-full space-y-[3px] mt-1.5">
                         {([
@@ -835,52 +866,84 @@ const App: React.FC = () => {
                       <span>📋</span> 전체 데이터 테이블
                     </span>
                     <span className="text-[10px] sm:text-xs text-gray-500 font-normal break-keep">
-                      — 1~45번 출현가능성 점수 전체 (순위순)
+                      — 1~45번 출현가능성 점수 전체 (융합 순위순 = 실제 선정 순서)
                     </span>
                   </div>
                   <span className="text-xs text-gray-500 font-bold flex-shrink-0 whitespace-nowrap">{showFullTable ? '▲ 접기' : '▼ 펼치기'}</span>
                 </button>
+                {!Number.isNaN(cutoffGap) && cutoffGap < 0.5 && (
+                  <div className="px-3 sm:px-4 py-2 bg-yellow-950/40 border-t border-yellow-800/40 text-[11px] text-yellow-300">
+                    ⚠️ 6위–7위 격차 {cutoffGap.toFixed(3)}점 — 사실상 동점이라 7~8위가 언제든 뒤집힐 수 있습니다.
+                  </div>
+                )}
                 {showFullTable && (
                   <div className="overflow-x-auto border-t border-gray-700 custom-scrollbar">
-                    <table className="w-full text-xs min-w-[450px]">
+                    <table className="w-full text-xs min-w-[680px]">
                       <thead>
                         <tr className="bg-gray-900 border-b border-gray-700">
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">순위</th>
+                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap" title="융합 순위 (실제 선정 순서)">순위</th>
                           <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">번호</th>
-                          <th className="py-2 px-3 text-teal-400 font-bold text-center whitespace-nowrap">출현가능성 <span className="text-gray-600 font-normal text-[10px]">점수(0~100)</span></th>
+                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">티어</th>
+                          <th className="py-2 px-3 text-teal-400 font-bold text-center whitespace-nowrap">융합 <span className="text-gray-600 font-normal text-[10px]">점수(0~100)</span></th>
+                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap" title="순수 앙상블 종합 점수">종합</th>
+                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap" title="5종 서브점수 중 65점 이상 개수">합의</th>
+                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap" title="80% 서브샘플 융합 상위 진입율">안정</th>
                           <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">패턴</th>
                           <th className="py-2 px-3 text-gray-500 font-bold text-left whitespace-nowrap">특징 요약</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {sorted45.map(item => {
+                        {fused.map(row => {
+                          const item = byNum.get(row.number);
+                          if (!item) return null;
                           const patObj = getPatObj(item);
                           const feat = getFeat(item);
-                          const rowCls = item.rank <= 6 ? 'bg-teal-950/20' : '';
-                          const scoreCls = item.compositeScore >= 65 ? 'text-emerald-400'
-                            : item.compositeScore >= 50 ? 'text-yellow-400'
-                            : item.compositeScore >= 35 ? 'text-gray-300' : 'text-blue-400';
-                          const barCls = item.compositeScore >= 65 ? 'bg-emerald-500'
-                            : item.compositeScore >= 50 ? 'bg-yellow-500'
-                            : item.compositeScore >= 35 ? 'bg-gray-500' : 'bg-blue-500';
+                          const tier = TIER_BADGE[row.tier];
+                          const rowCls = row.tier === 'pick' ? 'bg-teal-950/20' : row.tier === 'next' ? 'bg-yellow-950/10' : '';
+                          const scoreCls = row.fusedScore >= 65 ? 'text-emerald-400'
+                            : row.fusedScore >= 50 ? 'text-yellow-400'
+                            : row.fusedScore >= 35 ? 'text-gray-300' : 'text-blue-400';
+                          const barCls = row.fusedScore >= 65 ? 'bg-emerald-500'
+                            : row.fusedScore >= 50 ? 'bg-yellow-500'
+                            : row.fusedScore >= 35 ? 'bg-gray-500' : 'bg-blue-500';
                           return (
-                            <tr key={item.number}
+                            <tr key={row.number}
                                 className={`border-b border-gray-800/60 hover:bg-gray-700/20 transition-colors ${rowCls}`}>
                               <td className="py-1.5 px-2 text-center">
-                                <span className={`font-black ${item.rank <= 3 ? 'text-yellow-400' : item.rank <= 6 ? 'text-teal-400' : 'text-gray-600'}`}>
-                                  {item.rank}
+                                <span className={`font-black ${row.fusedRank <= 3 ? 'text-yellow-400' : row.fusedRank <= 6 ? 'text-teal-400' : 'text-gray-600'}`}>
+                                  {row.fusedRank}
                                 </span>
+                                <div className="text-[9px] text-gray-600">종합 {row.ensRank}위</div>
                               </td>
                               <td className="py-1.5 px-2 text-center">
-                                <div className="flex justify-center cursor-pointer" onClick={() => handleBallClick(item.number)}>
-                                  <Ball num={item.number} small />
+                                <div className="flex justify-center cursor-pointer" onClick={() => handleBallClick(row.number)}>
+                                  <Ball num={row.number} small />
                                 </div>
                               </td>
+                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                                <span className={`inline-block text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${tier.cls}`}>{tier.label}</span>
+                                {row.contested && (
+                                  <div className="text-[9px] font-bold text-red-300 mt-0.5" title="앙상블 순위와 10위 이상 엇갈림">※분열</div>
+                                )}
+                              </td>
                               <td className="py-1.5 px-3 text-center whitespace-nowrap">
-                                <div className={`font-black text-sm ${scoreCls}`}>{item.compositeScore.toFixed(1)}</div>
+                                <div className={`font-black text-sm ${scoreCls}`}>{row.fusedScore.toFixed(1)}</div>
                                 <div className="w-full h-1 bg-gray-700 rounded-full mt-0.5 overflow-hidden">
-                                  <div className={`h-full rounded-full ${barCls}`} style={{ width: `${item.compositeScore}%` }} />
+                                  <div className={`h-full rounded-full ${barCls}`} style={{ width: `${Math.min(100, row.fusedScore)}%` }} />
                                 </div>
+                              </td>
+                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                                <span className="text-gray-400 text-[11px]">{row.compositeScore.toFixed(1)}</span>
+                              </td>
+                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                                <span className={`text-[11px] font-bold ${row.agreement5 >= 4 ? 'text-emerald-400' : row.agreement5 >= 3 ? 'text-yellow-400' : 'text-gray-500'}`}>
+                                  {row.agreement5}/5
+                                </span>
+                              </td>
+                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                                <span className="text-gray-400 text-[11px]">
+                                  {row.stability === null ? '─' : `${Math.round(row.stability * 100)}%`}
+                                </span>
                               </td>
                               <td className="py-1.5 px-2 text-center whitespace-nowrap">
                                 <span className={`inline-block text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${patObj.cls}`}>{patObj.label}</span>
@@ -893,6 +956,9 @@ const App: React.FC = () => {
                         })}
                       </tbody>
                     </table>
+                    <div className="px-3 sm:px-4 py-2 bg-gray-900 text-[10px] text-gray-500 border-t border-gray-700">
+                      ▶확정 1~6위(가져갈 번호) · ◆차순 7~12위(교체 후보) · ✕회피 40~45위 · ※분열 = 종합 순위와 10위 이상 엇갈림 · 합의 n/5 · 안정 = 재현율(선택의 재현성이지 적중률이 아님)
+                    </div>
                   </div>
                 )}
               </div>
@@ -902,8 +968,17 @@ const App: React.FC = () => {
 
         {/* ══ [1.5] 🔗 번호 흐름 분석 ══ */}
         {flowAnalysis && indicatorTable.length > 0 && (() => {
-          const top6 = [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6);
-          const { trends, gapInfo, segmentFlow, longAbsent, recentlyBack } = flowAnalysis;
+          // 융합 Top6의 흐름 근거 — 카드·표와 동일한 선정 순서 공유.
+          const fusedTop6 = fusedTable.length > 0
+            ? fusedTable.slice(0, 6)
+            : [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6)
+                .map((t, i) => ({
+                  number: t.number, compositeScore: t.compositeScore, ensRank: t.rank,
+                  fusedScore: t.compositeScore, fusedRank: i + 1, agreement5: 0,
+                  stability: null as number | null, tier: 'mid' as const, contested: false,
+                }));
+          const { trends, gapInfo, segmentFlow, longAbsent, recentlyBack, connectionScores } = flowAnalysis;
+          const segOf = (n: number) => segmentFlow.find(s => n >= s.lo && n <= s.hi);
 
           const trendStyle: Record<string, string> = {
             '급락': 'text-blue-300 bg-blue-900/50 border border-blue-700/60',
@@ -1006,40 +1081,52 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {/* 4. 상위 6개 번호 흐름 근거 */}
+              {/* 4. 상위 6개 번호 흐름 근거 (융합 선정 + 디테일 흐름) */}
               <div>
                 <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
                   <span>🏆</span> 상위 6개 번호 흐름 근거
+                  <span className="font-normal text-gray-600">— 융합 순위 공유 · 추세/대기/연결/구간 근거</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {top6.map((item, idx) => {
-                    const trend  = trends[item.number] ?? '안정';
-                    const gap    = gapInfo[item.number];
-                    const isBack = recentlyBack.includes(item.number);
+                  {fusedTop6.map((row, idx) => {
+                    const trend  = trends[row.number] ?? '안정';
+                    const gap    = gapInfo[row.number];
+                    const conn   = connectionScores?.[row.number];
+                    const seg    = segOf(row.number);
+                    const isBack = recentlyBack.includes(row.number);
                     const isOverdue = gap && gap.overdueRatio >= 1.2;
                     const reasons: string[] = [];
                     if (trend === '급락')      reasons.push('급락 후 반등 기대');
                     else if (trend === '급등') reasons.push('상승 모멘텀 유지');
                     else if (trend === '상승') reasons.push('안정적 상승세');
                     else if (trend === '하락') reasons.push('저활성 → 회귀 가능');
-                    if (isOverdue && gap) reasons.push(`${gap.curGap}회 대기 (${gap.overdueRatio.toFixed(1)}× 초과)`);
+                    if (isOverdue && gap) reasons.push(`${gap.curGap}회 대기 (평균 ${gap.avgGap}회 · ${gap.overdueRatio.toFixed(1)}× 초과)`);
+                    else if (gap)         reasons.push(`${gap.curGap}회 대기 (평균 ${gap.avgGap}회)`);
+                    if (conn !== undefined) reasons.push(`연결강도 ${conn.toFixed(0)}/100`);
+                    if (seg) reasons.push(`구간 [${seg.label}] ${seg.trend}`);
                     if (isBack)              reasons.push('장기 공백 후 복귀');
                     if (gap?.isPeriodic)     reasons.push('주기적 출현 패턴');
                     if (reasons.length === 0) reasons.push('지표 종합 우위');
                     return (
-                      <div key={item.number}
+                      <div key={row.number}
                            className="bg-gray-900/80 rounded-xl border border-gray-700/60 p-3 flex items-start gap-3 cursor-pointer hover:bg-gray-700/30 transition-colors"
-                           onClick={() => handleBallClick(item.number)}>
+                           onClick={() => handleBallClick(row.number)}
+                           title={`융합 ${row.fusedScore.toFixed(1)}점 · 합의 ${row.agreement5}/5 · 안정 ${row.stability === null ? '─' : `${Math.round(row.stability * 100)}%`}${row.contested ? ' · 의견 분열' : ''}`}>
                         <div className="flex flex-col items-center gap-1 flex-shrink-0">
                           <div className="text-[9px] text-gray-600 font-bold">#{idx + 1}</div>
-                          <Ball num={item.number} small />
+                          <Ball num={row.number} small />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trendStyle[trend]}`}>{trend}</span>
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trendStyle[trend] ?? trendStyle['안정']}`}>{trend}</span>
                             {gap && <span className="text-[10px] text-gray-500">{gap.curGap}회 대기</span>}
+                            {conn !== undefined && <span className="text-[10px] text-gray-500">연결 {conn.toFixed(0)}</span>}
+                            {row.contested && <span className="text-[10px] font-bold text-red-300">※분열</span>}
                           </div>
                           <div className="text-[11px] text-gray-400 leading-relaxed">{reasons.join(' · ')}</div>
+                          <div className="text-[10px] text-gray-600 mt-0.5">
+                            융합 {row.fusedScore.toFixed(1)} · 합의 {row.agreement5}/5 · 안정 {row.stability === null ? '─' : `${Math.round(row.stability * 100)}%`}
+                          </div>
                         </div>
                       </div>
                     );
