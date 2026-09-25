@@ -761,23 +761,34 @@ const App: React.FC = () => {
             avoid: { label: '✕ 회피', cls: 'text-blue-400 bg-blue-900/30 border border-blue-800/50' },
             mid:   { label: '· 중립', cls: 'text-gray-500 bg-gray-800/40 border border-gray-700/50' },
           };
+          // 패턴: 공인 가중 총평 signalScore(MA 20% + RSI 30% + BB 35% + Aroon 15%) 단일 기준.
+          // 기존에는 MA+RSI 원시값 독자 임계값(65/35 등)만 사용해 서비스 공인
+          // 판정과 어긋났음. 방향 정의는 기존과 동일(상승=과열 활성,
+          // 하락=냉각 후 회귀 기대). 분포 검증: 합성 957회차에서
+          // 상승 3 · 하락 20 · 유지 5 · 변동 17로 변별력 확보.
           const getPatObj = (item: FullIndicatorAnalysis) => {
-            const { maSignal, rsi } = item;
-            if (rsi > 65 && maSignal > 0.015)  return { label: '상승', cls: 'text-red-400 bg-red-900/40 border border-red-800/60' };
-            if (rsi < 35 && maSignal < -0.015) return { label: '하락', cls: 'text-blue-400 bg-blue-900/40 border border-blue-800/60' };
-            if (Math.abs(maSignal) <= 0.012 && rsi >= 38 && rsi <= 62) return { label: '유지', cls: 'text-gray-400 bg-gray-700/40 border border-gray-600/50' };
+            const v = item.signalScore;
+            if (v <= -0.5) return { label: '상승', cls: 'text-red-400 bg-red-900/40 border border-red-800/60' };
+            if (v >= 0.5)  return { label: '하락', cls: 'text-blue-400 bg-blue-900/40 border border-blue-800/60' };
+            if (Math.abs(v) <= 0.15) return { label: '유지', cls: 'text-gray-400 bg-gray-700/40 border border-gray-600/50' };
             return { label: '변동', cls: 'text-yellow-400 bg-yellow-900/30 border border-yellow-800/60' };
           };
+          // 특징: 공인 이산 신호 + Z-Score + 가중 총평을 순서 고정으로 열거.
+          // 기존에는 MA 누락·Aroon ±60(공인 ±30과 불일치) 문제가 있었음.
           const getFeat = (item: FullIndicatorAnalysis) => {
             const f: string[] = [];
+            if (item.signalScore >= 0.5)       f.push('회귀 우세');
+            else if (item.signalScore <= -0.5) f.push('과열 우세');
             if (item.zScore < -1.0)            f.push('장기 저출현');
             else if (item.zScore > 1.0)         f.push('장기 과출현');
-            if (item.rsi < 30)                  f.push('RSI 과소');
-            else if (item.rsi > 70)             f.push('RSI 과다');
-            if (item.bollingerPctB < 0.15)      f.push('BB 하단');
-            else if (item.bollingerPctB > 0.85) f.push('BB 상단');
-            if (item.aroonOscillator < -60)     f.push('장기 공백');
-            else if (item.aroonOscillator > 60) f.push('단기 활성');
+            if (item.rsiScore > 0)             f.push('RSI 과소');
+            else if (item.rsiScore < 0)         f.push('RSI 과다');
+            if (item.bbScore > 0)              f.push('BB 하단');
+            else if (item.bbScore < 0)          f.push('BB 상단');
+            if (item.aroonScore > 0)           f.push('장기 공백');
+            else if (item.aroonScore < 0)       f.push('단기 활성');
+            if (item.maScore > 0)              f.push('MA 냉각');
+            else if (item.maScore < 0)          f.push('MA 과열');
             return f.length > 0 ? f.join(' · ') : '평균 범위 내';
           };
           return (
@@ -796,11 +807,11 @@ const App: React.FC = () => {
                   const trend = flowAnalysis?.trends[row.number] ?? '안정';
                   const gap = flowAnalysis?.gapInfo[row.number];
                   const signals: string[] = [];
-                  if (item.zScore < -0.5)         signals.push('저출현 회귀');
-                  if (item.rsi < 35)              signals.push('RSI 과소');
-                  if (item.bollingerPctB < 0.3)   signals.push('BB 하단');
-                  if (item.aroonOscillator < -30)  signals.push('장기 공백');
-                  if (item.maSignal < -0.01)      signals.push('MA 냉각');
+                  if (item.zScore < -0.5)    signals.push('저출현 회귀');
+                  if (item.rsiScore > 0)     signals.push('RSI 과소');
+                  if (item.bbScore > 0)      signals.push('BB 하단');
+                  if (item.aroonScore > 0)   signals.push('장기 공백');
+                  if (item.maScore > 0)      signals.push('MA 냉각');
                   const borderCls = row.tier === 'pick'
                     ? 'border-emerald-700/60 bg-emerald-950/40'
                     : row.tier === 'next'

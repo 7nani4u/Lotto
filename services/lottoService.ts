@@ -961,6 +961,16 @@ export interface FullIndicatorAnalysis {
   aroonSubScore: number;
   zSubScore: number;
 
+  // ── 이산 신호 점수 (TechnicalIndicatorScore와 동일 정의) ──
+  // +1 회귀(과소출현) / 0 중립 / -1 억제(과다출현).
+  // 사이트 표시(패턴·특징·카드 신호)는 원시값 독자 임계값이 아닌 이 값을 사용.
+  maScore: number;
+  rsiScore: number;
+  bbScore: number;
+  aroonScore: number;
+  // 가중 합산 신호 (MA 20% + RSI 30% + BB 35% + Aroon 15%), 범위 −1.0 ~ +1.0
+  signalScore: number;
+
   // ── 종합 출현 가능성 점수 (0~100) ──
   compositeScore: number;
 
@@ -1004,6 +1014,11 @@ export function buildFullAnalysisTable(results: LottoResult[]): FullIndicatorAna
       bbSubScore:      +bbSubScore.toFixed(1),
       aroonSubScore:   +aroonSubScore.toFixed(1),
       zSubScore:       +zSubScore.toFixed(1),
+      maScore:         tech.maScore,
+      rsiScore:        tech.rsiScore,
+      bbScore:         tech.bbScore,
+      aroonScore:      tech.aroonScore,
+      signalScore:     tech.signalScore,
       compositeScore:  +compositeScore,
       rank:            0,
     };
