@@ -19,6 +19,23 @@ lotto_technical_indicators.py
   고급 엔진 6종 (60%)
     양자분석(QA) 12% · 양자플럭스(QF) 10% · 신경패턴(NP) 10%
     마르코프3D(M3D) 10% · 통합양자(IQ) 10% · 고급클러스터(AC) 8%
+
+[확률 전제 — 반드시 준수]
+  로또 6/45 매 회차 추첨은 독립 사건이며 모든 번호 조합의 추첨 확률은 동일합니다.
+  본 파일의 모든 점수·랭킹·융합은 "과거 출현 패턴의 기술적 서술"일 뿐,
+  미래 당첨 확률을 높이거나 보장하지 않습니다. 실측된 엔진 간 중복·역상관
+  (아래 [알려진 중복] 참조)은 가중치 설계 시 반드시 함께 제시합니다.
+
+[알려진 중복 — 실측, seed 42/7/123 3종 표본(n=100)에서 안정적]
+  · QA × IQ 상관계수 ≈ +0.95 (둘 다 갭+빈도 회귀 신호, 합산 가중 22%)
+  · 볼린저밴드 × RSI ≈ +0.81~0.83 (둘 다 롤링 윈도우 과소출현 신호)
+  · M3D × 앙상블 종합 ≈ −0.36~−0.58 (M3D만 모멘텀 방향, 나머지는 회귀 방향)
+  가중치는 기존 의도 보존을 위해 변경하지 않고, diagnose_engines()로 상시 확인합니다.
+
+[출현(Appearance) 정의 — 전 엔진 통일]
+  보너스볼을 포함한 7개 번호 기준 (_appears ≡ _iter_nums 기본값).
+  과거에는 QA/NP/QF/M3D/AC가 메인 6개만, BB/Z/IQ/MA/RSI/Aroon이 7개를 세어
+  같은 "출현"이 엔진마다 다른 의미였습니다. _iter_nums()로 통일합니다.
 ════════════════════════════════════════════════════════════════════════════════
 """
 
@@ -85,6 +102,19 @@ def _appears(draw: DrawResult, num: int) -> bool:
     return num in draw.numbers or draw.bonus == num
 
 
+def _iter_nums(draw: DrawResult, include_bonus: bool = True) -> list[int]:
+    """
+    한 회차의 추첨 번호 목록을 반환합니다 (기본: 보너스 포함 7개).
+
+    [통일 이유] 엔진마다 출현 집계 범위가 달랐습니다 (QA/NP/QF/M3D/AC=메인 6개,
+    BB/Z/IQ/MA/RSI/Aroon=7개). 전이·빈도·갭 계산을 모두 이 헬퍼로 통일하여
+    "출현"의 정의가 엔진마다 달라지는 문제를 제거합니다.
+    """
+    if include_bonus:
+        return [*draw.numbers, draw.bonus]
+    return list(draw.numbers)
+
+
 # ════════════════════════════════════════════════════════════════════════════════
 # §2. 파트 A — 전통적 기술 지표 (평균 회귀 관점, 1년치 최적화 파라미터)
 # ════════════════════════════════════════════════════════════════════════════════
@@ -114,8 +144,7 @@ def calc_bollinger_all(draws: list[DrawResult], window: int = 45) -> dict[int, f
     w = min(window, len(draws))
     freq = {n: 0 for n in range(1, 46)}
     for d in draws[:w]:
-        for n in d.numbers: freq[n] += 1
-        freq[d.bonus] += 1
+        for n in _iter_nums(d): freq[n] += 1
     vals  = list(freq.values())
     mu    = statistics.mean(vals)
     sigma = statistics.pstdev(vals) or 1.0
@@ -146,8 +175,7 @@ def calc_zscore_all(draws: list[DrawResult]) -> dict[int, float]:
     """Z-Score → 점수 (음수 Z = 과소출현 = 높은 점수) — 전체 회차 일괄 계산"""
     freq = {n: 0 for n in range(1, 46)}
     for d in draws:
-        for n in d.numbers: freq[n] += 1
-        freq[d.bonus] += 1
+        for n in _iter_nums(d): freq[n] += 1
     vals  = list(freq.values())
     mu    = statistics.mean(vals)
     sigma = statistics.pstdev(vals) or 1.0
@@ -181,12 +209,15 @@ def calc_quantum_analysis(draws: list[DrawResult]) -> dict[int, float]:
         return scores
     freq, last_seen = [0] * 46, [-1] * 46
     for idx, d in enumerate(draws[:window]):
-        for n in d.numbers:
+        # [수정] 보너스볼을 freq에도 집계. 기존에는 last_seen만 보너스를 반영하고
+        # freq는 메인 6개만 세어 갭과 빈도의 기준이 서로 달랐음. IQ/BB/Z와 통일.
+        for n in _iter_nums(d):
             freq[n] += 1
             if last_seen[n] == -1: last_seen[n] = idx
-        if last_seen[d.bonus] == -1: last_seen[d.bonus] = idx
     for n in range(1, 46):
-        gap = 50 if last_seen[n] == -1 else last_seen[n]
+        # [수정] 미출현 갭 하드코딩 50 → 실제 window. 데이터가 50회 미만이면
+        # 관측 가능한 최대 갭(window)을 사용해야 편향이 없음.
+        gap = window if last_seen[n] == -1 else last_seen[n]
         scores[n] = gap * 1.5 - freq[n] * 0.8
     return _normalize(scores)
 
@@ -206,8 +237,9 @@ def calc_quantum_flux(draws: list[DrawResult]) -> dict[int, float]:
     if len(draws) < 20:
         return scores
     for d in draws[:20]:
-        for n in d.numbers: scores[n] += 1.0
-    for n in draws[0].numbers:
+        for n in _iter_nums(d): scores[n] += 1.0
+    # [수정] 최근 회차 7개 번호(보너스 포함)를 흐름 기점으로 사용. 집계와 통일.
+    for n in _iter_nums(draws[0]):
         scores[n] += 3.0
         if n > 1:  scores[n - 1] += 1.5
         if n < 45: scores[n + 1] += 1.5
@@ -230,16 +262,41 @@ def calc_neural_pattern(draws: list[DrawResult]) -> dict[int, float]:
         return scores
     recent5, prev5 = [0] * 46, [0] * 46
     for d in draws[0:5]:
-        for n in d.numbers: recent5[n] += 1
+        for n in _iter_nums(d): recent5[n] += 1
     for d in draws[5:10]:
-        for n in d.numbers: prev5[n] += 1
+        for n in _iter_nums(d): prev5[n] += 1
     for n in range(1, 46):
         scores[n] += (recent5[n] - prev5[n]) * 2.5
     if len(draws) > 7:
-        for n in draws[7].numbers: scores[n] += 3.0
+        for n in _iter_nums(draws[7]): scores[n] += 3.0
     # 역전: 감소 추세 번호(Delta 낮음)에 높은 점수
     raw_inv = {n: -scores[n] for n in range(1, 46)}
     return _normalize(raw_inv)
+
+
+# ── 공용: 연속 회차 전이 카운트 ─────────────────────────────────────────────
+def build_transition_counts(draws: list[DrawResult],
+                            window: int) -> dict[int, dict[int, int]]:
+    """
+    연속 회차 간 번호 전이 카운트 T[p][c]를 구성합니다.
+    T[p][c] = 번호 p가 나온 회차의 "다음(최신 방향)" 회차에 번호 c가 나온 횟수.
+    draws[0]이 최신이므로 draws[i+1](과거) → draws[i](최신) 방향으로 집계합니다.
+
+    [통합 이유] Engine-4(M3D)와 흐름분석 _connection_scores_all()이 같은
+    45×45 행렬을 각자 구축했습니다 (실측 상관계수 ≈ +0.94의 근원).
+    계산 로직은 하나로 통일하고, 윈도우·조회 방식의 차이만 호출자가 지정합니다.
+    집계는 _iter_nums() 7개 번호 기준 (기존 메인-6개 한정에서 변경, 통일 목적).
+    """
+    w = min(window, len(draws))
+    T: dict[int, dict[int, int]] = {p: {c: 0 for c in range(1, 46)} for p in range(1, 46)}
+    for i in range(w - 1):
+        prev_nums = _iter_nums(draws[i + 1])
+        cur_nums = _iter_nums(draws[i])
+        for p in prev_nums:
+            row = T[p]
+            for c in cur_nums:
+                row[c] += 1
+    return T
 
 
 # ── Engine-4: 통합 3D 엔진 / 마르코프 3D (M3D) ───────────────────────────────
@@ -250,18 +307,18 @@ def calc_markov_3d(draws: list[DrawResult]) -> dict[int, float]:
     전이 확률 행렬: T[p][c] = 번호 p 이후 회차에 번호 c가 출현한 횟수.
     최근 회차 번호들로부터 다음 회차에 출현할 번호를 전이 확률로 예측.
       Score(n) = Σ T[last_num][n] × 1.5  (최근 회차 번호 기준)
+
+    [참고] 흐름분석의 연결강도와 같은 행렬을 공유하므로 둘은 유사한 신호입니다
+    (실측 r≈+0.94). 모멘텀 방향 신호라 회귀 앙상블과 역상관(r≈−0.4~−0.6)이며,
+    이는 다변화 의도로 유지합니다. 가중치는 변경하지 않습니다.
     """
     scores = {n: 0.0 for n in range(1, 46)}
     window = min(50, len(draws))
     if window < 20:
         return scores
-    transition = {p: {c: 0 for c in range(1, 46)} for p in range(1, 46)}
-    for i in range(window - 1):
-        for p in draws[i + 1].numbers:
-            for c in draws[i].numbers:
-                transition[p][c] += 1
+    transition = build_transition_counts(draws, window)
     for n in range(1, 46):
-        for last_num in draws[0].numbers:
+        for last_num in _iter_nums(draws[0]):
             scores[n] += transition[last_num][n] * 1.5
     return _normalize(scores)
 
@@ -292,8 +349,7 @@ def calc_integrated_quantum(draws: list[DrawResult]) -> dict[int, float]:
         expected = w * 7.0 / 45.0   # 이론 기대 출현 횟수 (보너스 포함)
         freq = {n: 0 for n in range(1, 46)}
         for d in draws[:w]:
-            for n in d.numbers: freq[n] += 1
-            freq[d.bonus] += 1
+            for n in _iter_nums(d): freq[n] += 1
         for n in range(1, 46):
             scores[n] += (expected - freq[n]) * weight  # 과소출현 = 양수
 
@@ -336,7 +392,7 @@ def calc_advanced_cluster(draws: list[DrawResult]) -> dict[int, float]:
         return scores
     cluster_freq = [0] * 5
     for d in draws[:15]:
-        for n in d.numbers:
+        for n in _iter_nums(d):
             cluster_freq[min(4, (n - 1) // 10)] += 1
     max_freq = max(cluster_freq)
     for n in range(1, 46):
@@ -370,6 +426,9 @@ def compute_hybrid_scores(draws: list[DrawResult]) -> list[ScoredNumber]:
     모든 엔진 점수를 O(N) 배치로 계산하고 앙상블 종합 점수를 반환합니다.
     횡단면 데이터(볼린저·Z-Score·6종 고급 엔진)는 한 번 계산 후 전체 공유.
     """
+    # [수정] 빈 입력 방어. 기존에는 calc_ma 등에서 ZeroDivisionError로 추락.
+    if not draws:
+        raise ValueError("compute_hybrid_scores: draws가 비어 있습니다 (최소 1회차 필요).")
     # ── 배치 계산 (전통 지표) ─────────────────────────────────────────────────
     bb_all = calc_bollinger_all(draws, window=45)
     z_all  = calc_zscore_all(draws)
@@ -761,16 +820,22 @@ def print_weight_summary() -> None:
             bar = _bar(weight * 100 / 15, width=6)  # 15%를 만점으로 시각화
             print(f"    {bar} {weight*100:>4.0f}%  {name:<22} {reason}")
     print()
+    print("  ※ 중복 주의 (실측): QA×IQ r≈+0.95 → 합산 22%가 사실상 단일 신호,")
+    print("    BB×RSI r≈+0.82, M3D는 앙상블과 역상관(모멘텀 vs 회귀). 가중치据置.")
+    print()
 
 
 # ── §5-4. 상위 6개 상세 해석 ─────────────────────────────────────────────────
 
 def print_top6_interpretation(scored: list[ScoredNumber]) -> None:
+    # [참고] 이 섹션은 순수 앙상블 상위 6개(흐름 미반영)를 해석합니다.
+    # 흐름이 반영된 최종 후보는 print_flow_top6_reasoning()(융합 랭킹)을 보십시오.
+    # 두 목록이 다를 수 있으며, 이는 흐름 신호가 앙상블과 다른 방향을 보기 때문입니다.
     top6 = scored[:6]
     print("=" * W)
-    print("  🎯 출현가능성 상위 6개 번호 — 앙상블 상세 동인 분석".center(W))
+    print("  🎯 출현가능성 상위 6개 번호 — 순수 앙상블 상세 동인 분석 (흐름 미반영)".center(W))
     print("=" * W)
-    print(f"\n  최종 추천 번호:  {' — '.join(f'{s.number:02d}번' for s in top6)}\n")
+    print(f"\n  순수 앙상블 추천 번호:  {' — '.join(f'{s.number:02d}번' for s in top6)}\n")
 
     indicator_meta = [
         ("Z-Score",          "s_z",     "전통",
@@ -940,7 +1005,7 @@ def print_disclaimer() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# §5-6. 번호 흐름 분석 — 연결 구조 기반 (이전·현재·다음 회차 흐름)
+# §5-9. 번호 흐름 분석 — 연결 구조 기반 (이전·현재·다음 회차 흐름)
 # ════════════════════════════════════════════════════════════════════════════════
 # 2번째 스크린샷 분석 의도 반영:
 #   ① 단순 빈도가 아닌, 회차 간 흐름의 연결성(연결 구조) 중심 분석
@@ -953,10 +1018,15 @@ def print_disclaimer() -> None:
 def _flow_trend_all(draws: list[DrawResult]) -> dict[int, dict]:
     """
     각 번호의 출현 추세를 단기(최근 5회) vs 직전 5회 비교로 분류합니다.
-    분류: 급락 / 하락 / 급등 / 상승 / 안정
+    분류: 급락 / 하락 / 급등 / 상승 / 안정 (+ 데이터부족)
     급락 = 이전엔 보통이었지만 최근 뚝 떨어짐 → 평균 회귀 기대
+
+    [수정] 회차가 10회 미만이면 f5/prev5 비교가 편향되므로 추세를 "데이터부족"으로
+    표기합니다. 기존에는 데이터 부족 시에도 급락/하락을 단정했습니다.
     """
+    # 7개 번호(보너스 포함) 기준 기대값 — _iter_nums/_appears 집계와 통일.
     exp5 = 5 * 7 / 45  # 5회차 이론 기대 출현 횟수 (보너스 포함)
+    short = len(draws) < 10
     result: dict[int, dict] = {}
     for n in range(1, 46):
         f5    = sum(1 for d in draws[:5]  if _appears(d, n))
@@ -966,7 +1036,9 @@ def _flow_trend_all(draws: list[DrawResult]) -> dict[int, dict]:
         r5    = f5    / exp5 if exp5 > 0 else 1.0
         rp5   = prev5 / exp5 if exp5 > 0 else 1.0
 
-        if   r5 < 0.4 and rp5 >= 0.8: trend = "급락"   # 이전엔 보통 → 최근 급감
+        if short:
+            trend = "데이터부족"
+        elif r5 < 0.4 and rp5 >= 0.8: trend = "급락"   # 이전엔 보통 → 최근 급감
         elif r5 > 1.6 and rp5 < 0.5:  trend = "급등"   # 이전엔 없다가 → 최근 급증
         elif r5 > 1.4 and rp5 > 1.0:  trend = "상승"   # 전반적 상승
         elif r5 < 0.4 and rp5 < 0.5:  trend = "하락"   # 전반적 공백
@@ -1019,23 +1091,24 @@ def _connection_scores_all(draws: list[DrawResult]) -> dict[int, float]:
     전이 확률 행렬 T[prev][next] 를 구성하고,
     최근 6회차 번호를 기점으로 가중 전이 점수를 계산합니다.
     이전 회차와 강하게 연결된 번호일수록 다음 회차 출현 가능성이 높다고 봅니다.
+
+    [수정] 행렬 구축을 build_transition_counts()로 통일 (Engine-4 M3D와 공유).
+    윈도우(60회)·최근 6회차 가중 조회 방식은 기존 그대로 유지합니다.
+    집계는 7개 번호 기준 (_iter_nums)으로 통일합니다.
     """
     window = min(60, len(draws))
     if window < 10:
         return {n: 50.0 for n in range(1, 46)}
 
-    T: dict[int, dict[int, int]] = {p: {c: 0 for c in range(1, 46)} for p in range(1, 46)}
-    for i in range(window - 1):
-        for p in draws[i + 1].numbers:   # 이전 회차 번호
-            for c in draws[i].numbers:   # 다음(현재) 회차 번호
-                T[p][c] += 1
+    T = build_transition_counts(draws, window)
 
     scores: dict[int, float] = {n: 0.0 for n in range(1, 46)}
     for lag in range(min(6, len(draws))):
         weight = 2.0 / (lag + 1)          # 최근 회차일수록 가중치 높음
-        for prev_n in draws[lag].numbers:
+        for prev_n in _iter_nums(draws[lag]):
+            row = T[prev_n]
             for cand in range(1, 46):
-                scores[cand] += T[prev_n][cand] * weight
+                scores[cand] += row[cand] * weight
 
     vals = list(scores.values())
     lo, hi = min(vals), max(vals)
@@ -1047,21 +1120,29 @@ def _segment_flow_all(draws: list[DrawResult]) -> list[dict]:
     """
     5개 구간(1~10 / 11~20 / 21~30 / 31~40 / 41~45)의
     최근 5회차 vs 직전 5회차 출현 수를 비교해 구간 흐름을 분석합니다.
+
+    [수정] 집계·기대값을 7개 번호(보너스 포함) 기준으로 통일합니다.
+    기존에는 메인 6개만 세면서 exp5도 6개 기준으로 계산해, 추세(_flow_trend_all,
+    7개 기준)와 구간 흐름의 분모가 서로 달랐습니다. 회차 10회 미만이면
+    추세를 "데이터부족"으로 표기합니다.
     """
     segs = [(1, 10, "1~10"), (11, 20, "11~20"), (21, 30, "21~30"),
             (31, 40, "31~40"), (41, 45, "41~45")]
+    short = len(draws) < 10
     result: list[dict] = []
     for lo, hi, name in segs:
         size = hi - lo + 1
-        exp5 = 5 * 6 * size / 45          # 5회차 이론 기대 출현 (메인 6개 기준)
-        r5   = sum(1 for d in draws[:5]    for n in d.numbers if lo <= n <= hi)
-        p5   = sum(1 for d in draws[5:10]  for n in d.numbers if lo <= n <= hi)
-        r20  = sum(1 for d in draws[:20]   for n in d.numbers if lo <= n <= hi)
-        p20  = sum(1 for d in draws[20:40] for n in d.numbers if lo <= n <= hi)
+        exp5 = 5 * 7 * size / 45          # 5회차 이론 기대 출현 (7개 번호 기준)
+        r5   = sum(1 for d in draws[:5]    for n in _iter_nums(d) if lo <= n <= hi)
+        p5   = sum(1 for d in draws[5:10]  for n in _iter_nums(d) if lo <= n <= hi)
+        r20  = sum(1 for d in draws[:20]   for n in _iter_nums(d) if lo <= n <= hi)
+        p20  = sum(1 for d in draws[20:40] for n in _iter_nums(d) if lo <= n <= hi)
         rr5  = r5 / exp5 if exp5 > 0 else 1.0
         rp5  = p5 / exp5 if exp5 > 0 else 1.0
 
-        if   rr5 > rp5 * 1.3: trend = "상승"
+        if short:
+            trend = "데이터부족"
+        elif rr5 > rp5 * 1.3: trend = "상승"
         elif rr5 < rp5 * 0.7: trend = "하락"
         else:                  trend = "안정"
 
@@ -1084,13 +1165,16 @@ def compute_flow_analysis(draws: list[DrawResult]) -> dict:
     seg_flow    = _segment_flow_all(draws)
 
     # 장기 미출현 번호 (최근 10회차 이상 연속 미출현)
+    # [수정] 회차가 10회 미만이면 "10회차 이상" 판정이 무의미하므로 빈 목록 반환.
+    # 기존에는 min(10, len)으로 짧은 데이터에서도 전원 미출현 판정이 가능했음.
     long_absent: list[int] = []
-    for n in range(1, 46):
-        for i in range(min(10, len(draws))):
-            if _appears(draws[i], n):
-                break
-        else:
-            long_absent.append(n)
+    if len(draws) >= 10:
+        for n in range(1, 46):
+            for i in range(10):
+                if _appears(draws[i], n):
+                    break
+            else:
+                long_absent.append(n)
 
     # 최근 재등장 번호 (5회차 이상 공백 후 최근 3회차 내 출현)
     recently_back: list[int] = []
@@ -1138,7 +1222,9 @@ def print_flow_analysis(draws: list[DrawResult],
     # ── 1. 최근 회차 흐름 요약 ────────────────────────────────────────────────
     print()
     print("  ┌─ 【1】 최근 회차 흐름 분석 요약 (최근 10회차 기준)")
-    all10    = [n for d in draws[:10] for n in d.numbers]
+    # [수정] 7개 번호(보너스 포함) 기준 집계. 기존에는 메인 6개만 세어
+    # 추세(_flow_trend_all, 7개 기준)와 같은 패널 안에서 분모가 달랐음.
+    all10    = [n for d in draws[:10] for n in _iter_nums(d)]
     cnt10    = collections.Counter(all10)
     hot8     = [n for n, _ in cnt10.most_common(8)]
     cold8    = sorted(n for n in range(1, 46) if cnt10.get(n, 0) == 0)[:8]
@@ -1229,19 +1315,109 @@ def print_flow_analysis(draws: list[DrawResult],
     print()
 
 
+# ════════════════════════════════════════════════════════════════════════════════
+# §5-7. 앙상블 × 흐름 융합 랭킹 — 흐름 신호의 실제 선정 반영
+# ════════════════════════════════════════════════════════════════════════════════
+# [고도화 이유] 기존 print_flow_top6_reasoning()은 순수 앙상블 상위 6개에 흐름
+# 해설만 덧붙였습니다. 제목의 "앙상블 × 흐름 종합"과 달리 흐름 점수가 선정에
+# 전혀 반영되지 않았고, 실측상 흐름 연결강도 상위 6개와 앙상블 상위 6개는
+# 완전히 겹치지 않았습니다 (seed 42 기준 교집합 0개). 아래 융합 랭킹이 흐름을
+# 실제 선정에 반영하는 유일한 경로입니다. 융합은 발견적(heuristic) 가중합이며
+# 당첨 확률 개선을 의미하지 않습니다.
+# ════════════════════════════════════════════════════════════════════════════════
+
+FLOW_WEIGHT_DEFAULT = 0.25  # 융합 시 흐름 점수 비중 (CLI --flow-weight로 변경 가능)
+
+FLOW_TREND_SCORES = {
+    "급락": 100.0,   # 강한 회귀 기대
+    "하락": 75.0,
+    "안정": 50.0,
+    "상승": 35.0,
+    "급등": 20.0,    # 모멘텀 과열 → 회귀 관점에서 감점
+    "데이터부족": 50.0,
+}
+
+
+def compute_flow_scores(flow_data: dict) -> dict[int, float]:
+    """
+    번호별 흐름 점수 (0~100)를 산출합니다.
+    구성: 연결강도(conn, 이미 0~100) + 대기초과율(overdue, 2.0 상한→0~100) +
+          추세 매핑(급락 100 … 급등 20)의 산술평균.
+    overdue 상한 2.0: 장기 미출현 1개 번호가 융합을 독점하지 못하도록 제한.
+    """
+    gd = flow_data["gap_data"]
+    cs = flow_data["conn_scores"]
+    ft = flow_data["flow_trend"]
+    out: dict[int, float] = {}
+    for n in range(1, 46):
+        overdue_score = min(gd[n]["overdue"], 2.0) / 2.0 * 100.0
+        trend_score = FLOW_TREND_SCORES.get(ft[n]["trend"], 50.0)
+        out[n] = (cs[n] + overdue_score + trend_score) / 3.0
+    return out
+
+
+def compute_fused_ranking(scored: list[ScoredNumber],
+                          flow_data: dict,
+                          flow_weight: float = FLOW_WEIGHT_DEFAULT
+                          ) -> list[dict]:
+    """
+    앙상블 종합 점수와 흐름 점수의 가중합으로 최종 순위를 산출합니다.
+      fused(n) = (1 − w) × composite(n) + w × flow(n)
+    w=0이면 순수 앙상블과 동일합니다. 반환은 fused 내림차순 딕셔너리 목록
+    (number / fused / composite / flow 키 포함).
+    """
+    if not 0.0 <= flow_weight <= 1.0:
+        raise ValueError(f"flow_weight는 0~1 범위여야 합니다 (입력: {flow_weight}).")
+    flow_scores = compute_flow_scores(flow_data)
+    comp = {s.number: s.composite for s in scored}
+    ranked = [
+        {"number": n,
+         "fused": (1.0 - flow_weight) * comp[n] + flow_weight * flow_scores[n],
+         "composite": comp[n],
+         "flow": flow_scores[n]}
+        for n in range(1, 46)
+    ]
+    ranked.sort(key=lambda x: (-x["fused"], x["number"]))
+    return ranked
+
+
+def recommend_combination(scored: list[ScoredNumber],
+                          flow_data: dict,
+                          flow_weight: float = FLOW_WEIGHT_DEFAULT,
+                          topk: int = 6) -> dict:
+    """
+    융합 랭킹 상위 topk개 번호를 오름차순 조합으로 반환합니다 (파이프라인용).
+    {"numbers": [...], "fused": [...], "flow_weight": w} 형식.
+    """
+    ranked = compute_fused_ranking(scored, flow_data, flow_weight)
+    picks = ranked[:topk]
+    return {"numbers": sorted(p["number"] for p in picks),
+            "fused": [round(p["fused"], 2) for p in picks],
+            "flow_weight": flow_weight}
+
+
 def print_flow_top6_reasoning(scored: list[ScoredNumber],
                                draws: list[DrawResult],
-                               flow_data: dict) -> None:
+                               flow_data: dict,
+                               fused: list[dict] | None = None,
+                               flow_weight: float = FLOW_WEIGHT_DEFAULT) -> None:
     """
-    앙상블 상위 6개 번호에 대해 흐름 분석 기반 선정 근거와 최종 요약을 출력합니다.
+    융합 랭킹 상위 6개 번호에 대해 흐름 분석 기반 선정 근거와 최종 요약을 출력합니다.
     당첨 보장이 아닌 '흐름상 유리한 가능성' 관점으로 설명합니다.
+
+    [수정] 선정 기준이 순수 앙상블 상위 6개(scored[:6])에서 융합 랭킹 상위 6개로
+    변경되었습니다. 기존 동작이 필요하면 fused=None 대신 flow_weight=0을 전달하면
+    순수 앙상블 순위가 그대로 재현됩니다.
     """
     ft  = flow_data["flow_trend"]
     gd  = flow_data["gap_data"]
     cs  = flow_data["conn_scores"]
     sf  = flow_data["seg_flow"]
     rb  = flow_data["recently_back"]
-    top6 = scored[:6]
+    if fused is None:
+        fused = compute_fused_ranking(scored, flow_data, flow_weight)
+    comp_map = {s.number: s for s in scored}
+    top6 = fused[:6]
 
     def _all_ind_scores(s: ScoredNumber) -> list[tuple[str, float]]:
         return [
@@ -1252,14 +1428,15 @@ def print_flow_top6_reasoning(scored: list[ScoredNumber],
         ]
 
     print("=" * W)
-    print("  🎯 출현 가능성 후보 최종 요약 — 흐름 분석 기반 번호별 선정 근거".center(W))
+    print("  🏆 출현가능성 상위 6개 번호 — 앙상블 × 흐름 융합 선정 근거".center(W))
     print("  ※ 통계적 흐름 분석 결과이며, 당첨 보장이 아닙니다.".center(W))
     print("=" * W)
-    print(f"\n  앙상블 × 흐름 종합 예측 후보:  "
-          f"{' — '.join(f'{s.number:02d}번' for s in top6)}\n")
+    print(f"\n  융합 예측 후보 (앙상블 {(1.0-flow_weight)*100:.0f}% + 흐름 {flow_weight*100:.0f}%):  "
+          f"{' — '.join(f'{p['number']:02d}번' for p in top6)}\n")
 
-    for rank, s in enumerate(top6, 1):
-        n    = s.number
+    for rank, p in enumerate(top6, 1):
+        n    = p["number"]
+        s    = comp_map[n]
         n_ft = ft[n]
         n_gd = gd[n]
         n_cs = cs[n]
@@ -1267,7 +1444,8 @@ def print_flow_top6_reasoning(scored: list[ScoredNumber],
         n_seg = next((seg for seg in sf if seg["lo"] <= n <= seg["hi"]), None)
 
         print("─" * (W - 4))
-        print(f"  [{rank}위 예측 후보] {n:02d}번   앙상블 종합 점수: {s.composite:.2f}/100  {_level(s.composite)}")
+        print(f"  [{rank}위 예측 후보] {n:02d}번   융합 점수: {p['fused']:.2f} "
+              f"(앙상블 {p['composite']:.1f} + 흐름 {p['flow']:.1f})  {_level(p['fused'])}")
         print()
 
         # ── 선정 근거 목록 구성 ───────────────────────────────────────────────
@@ -1287,7 +1465,11 @@ def print_flow_top6_reasoning(scored: list[ScoredNumber],
             )
 
         trend = n_ft["trend"]
-        if trend == "급락":
+        if trend == "데이터부족":
+            reasons.append(
+                "추세 판단 보류 — 분석 회차가 10회 미만이라 단기/직전 비교가 편향됨"
+            )
+        elif trend == "급락":
             reasons.append(
                 f"최근 급락 추세 — 이전5회 {n_ft['prev5']}번 → 최근5회 {n_ft['f5']}번으로 감소, "
                 f"흐름상 평균 회귀 가능성"
@@ -1359,7 +1541,7 @@ def print_flow_top6_reasoning(scored: list[ScoredNumber],
     # ── 핵심 이유 요약 ─────────────────────────────────────────────────────────
     print()
     print("  ┌─ 출현 가능성이 높다고 판단한 핵심 이유 요약")
-    print(f"  │  1. 앙상블 종합 점수 상위 6개 — 11종 지표의 가중 합산 결과")
+    print(f"  │  1. 융합 랭킹 상위 6개 — 앙상블×흐름 가중합 (w={flow_weight:.2f})")
     print(f"  │  2. 평균 대기 초과 여부 — 과소출현 구간 진입 가능성")
     print(f"  │  3. 회차 간 연결 흐름 — 전이 확률 기반 다음 회차 연관성")
     print(f"  │  4. 구간 흐름 분석 — 저조한 구간에서의 흐름상 회귀 가능성")
@@ -1372,51 +1554,213 @@ def print_flow_top6_reasoning(scored: list[ScoredNumber],
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+# §5-8. 엔진 중복 진단 · 실데이터 로더 · 홀드아웃 백테스트
+# ════════════════════════════════════════════════════════════════════════════════
+
+def diagnose_engines(scored: list[ScoredNumber]) -> None:
+    """
+    11종 지표 점수 간 상관계수로 중복 신호를 점검합니다.
+    |r|≥0.80 쌍과 종합 점수 대비 상관을 출력합니다 (서술용, 가중치 변경 없음).
+    """
+    keys = ["s_z", "s_bb", "s_rsi", "s_ma", "s_aroon",
+            "s_qa", "s_qf", "s_np", "s_m3d", "s_iq", "s_ac"]
+    vec = {k: [getattr(s, k) for s in scored] for k in keys}
+    print("─" * W)
+    print("  🔍 엔진 중복 진단 — 지표 간 상관계수".center(W))
+    print("─" * W)
+    print("  기준: |r| ≥ 0.80 (강한 중복 의심). 가중치는 변경하지 않습니다.")
+    found = False
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            try:
+                r = statistics.correlation(vec[keys[i]], vec[keys[j]])
+            except statistics.StatisticsError:
+                continue
+            if abs(r) >= 0.80:
+                found = True
+                print(f"    {keys[i]:>8} × {keys[j]:<8}  r={r:+.3f}  "
+                      f"{'← 동일 신호 이중 계산 의심' if abs(r) >= 0.90 else ''}")
+    if not found:
+        print("    강한 중복 쌍 없음.")
+    comp = [s.composite for s in scored]
+    parts = []
+    for k in keys:
+        try:
+            parts.append(f"{k}={statistics.correlation(vec[k], comp):+.2f}")
+        except statistics.StatisticsError:
+            parts.append(f"{k}=n/a")
+    print("  종합 대비 상관: " + "  ".join(parts))
+    print("  ※ M3D가 음수면 모멘텀↔회귀 방향 충돌 (다변화 의도로 유지, 가중치据置).")
+    print()
+
+
+def load_draws_json(path: str) -> list[DrawResult]:
+    """
+    실제 추첨 기록 JSON을 로드합니다. 형식:
+      [{"round": 1200, "numbers": [1,2,3,4,5,6], "bonus": 7}, ...]
+    또는 {"draws": [...]}. 최신 회차가 앞에 오도록 내림차순 정렬합니다.
+    """
+    import json
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    items = raw["draws"] if isinstance(raw, dict) and "draws" in raw else raw
+    draws = [DrawResult(round=int(d["round"] if "round" in d else d.get("ltEpsd", 0)),
+                        numbers=sorted(int(x) for x in d["numbers"])[:6],
+                        bonus=int(d["bonus"] if "bonus" in d else d.get("bnsWnNo", 0)))
+             for d in items]
+    draws.sort(key=lambda d: d.round, reverse=True)
+    if not draws:
+        raise ValueError(f"{path}: 회차 데이터가 비어 있습니다.")
+    return draws
+
+
+def holdout_backtest(draws: list[DrawResult],
+                     holdout: int = 10,
+                     topk: int = 6,
+                     flow_weight: float = FLOW_WEIGHT_DEFAULT) -> dict:
+    """
+    홀드아웃 백테스트 (누수 방지: 타깃보다 과거 데이터로만 학습).
+
+    각 타깃 회차 i(0=최신)에 대해 draws[i+1:] (과거のみ) 로 융합 랭킹을 계산하고
+    실제 메인 6개 번호와 적중 수를 셉니다. 무작위 6개 조합의 기대 적중은
+    6×6/45 = 0.80개이므로, 평균 적중이 0.80 근처면 "패턴 무의미" 구간입니다.
+    과거 적합이 좋아도 미래 당첨 확률 상승으로 해석하지 마십시오.
+    """
+    holdout = min(holdout, max(0, len(draws) - 20))
+    if holdout <= 0:
+        raise ValueError("holdout_backtest: 학습용 20회차+검증 회차가 필요합니다.")
+    hits: list[int] = []
+    for i in range(holdout):
+        train = draws[i + 1:]
+        if len(train) < 20:
+            break
+        scored = compute_hybrid_scores(train)
+        flow = compute_flow_analysis(train)
+        rec = recommend_combination(scored, flow, flow_weight, topk)
+        actual = set(draws[i].numbers)
+        hits.append(sum(1 for n in rec["numbers"] if n in actual))
+    mean_hits = sum(hits) / len(hits) if hits else 0.0
+    return {"targets": len(hits),
+            "hits": hits,
+            "mean_hits": round(mean_hits, 3),
+            "hit3_rate": round(sum(1 for h in hits if h >= 3) / len(hits) * 100, 2) if hits else 0.0,
+            "random_baseline": 0.80,
+            "flow_weight": flow_weight}
+
+
+def print_backtest_report(res: dict) -> None:
+    print("─" * W)
+    print("  🧪 홀드아웃 백테스트 — 과거 재현 서술 (예측 성능 보장 아님)".center(W))
+    print("─" * W)
+    print(f"  검증 타깃: {res['targets']}회차  |  회차별 적중: {res['hits']}")
+    print(f"  평균 적중: {res['mean_hits']}개  |  무작위 기대: {res['random_baseline']}개  |  "
+          f"3개+ 적중률: {res['hit3_rate']}%")
+    if res["mean_hits"] <= res["random_baseline"] + 0.05:
+        print("  → 무작위 수준. 흐름·앙상블 신호에 예측력이 있다고 볼 수 없습니다.")
+    else:
+        print("  → 과거 구간에서 무작위를 상회. 단, 과적합 가능성과 독립추첨 전제상")
+        print("    미래 당첨 확률 상승으로 해석해서는 안 됩니다.")
+    print()
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # §6. 메인 진입점
 # ════════════════════════════════════════════════════════════════════════════════
 
-def main(n_rounds: int = 100, seed: int = 42) -> None:
-    print("\n" + "=" * W)
-    print("  한국 로또 6/45 — 하이브리드 슈퍼 앙상블 분석 시스템".center(W))
-    print("  전통 통계 지표 5종 (40%) + 고급 예측 엔진 6종 (60%)".center(W))
-    print("=" * W)
-    print(f"\n  분석 회차: {n_rounds}회  |  가중치 합계: {sum(WEIGHTS.values()):.2f}")
+def main(n_rounds: int = 100, seed: int = 42,
+         flow_weight: float = FLOW_WEIGHT_DEFAULT,
+         history_path: str | None = None,
+         holdout: int = 0,
+         topk: int = 6,
+         quiet: bool = False) -> None:
+    if history_path:
+        draws = load_draws_json(history_path)
+        data_label = f"실데이터 {len(draws)}회차 ({history_path})"
+    else:
+        draws = make_sample_draws(n_rounds=n_rounds, seed=seed)
+        data_label = f"샘플 {n_rounds}회차 (seed={seed}) — 시연용 무작위 데이터"
+    if not quiet:
+        print("\n" + "=" * W)
+        print("  한국 로또 6/45 — 하이브리드 슈퍼 앙상블 분석 시스템".center(W))
+        print("  전통 통계 지표 5종 (40%) + 고급 예측 엔진 6종 (60%)".center(W))
+        print("=" * W)
+        print(f"\n  데이터: {data_label}  |  가중치 합계: {sum(WEIGHTS.values()):.2f}  |  "
+              f"융합 흐름비중: {flow_weight:.2f}")
 
-    print(f"\n  데이터 로딩 및 배치 계산 중 (11종 × 45번호)... ", end="", flush=True)
-    draws  = make_sample_draws(n_rounds=n_rounds, seed=seed)
+    if holdout > 0:
+        if not history_path:
+            print("\n  [경고] --holdout는 실데이터(--history)와 함께 사용해야 합니다. "
+                  "샘플 데이터 백테스트는 무의미하므로 건너뜁니다.")
+        else:
+            print(f"\n  홀드아웃 백테스트 수행 중 ... ", end="", flush=True)
+            res = holdout_backtest(draws, holdout, topk, flow_weight)
+            print("완료.\n")
+            print_backtest_report(res)
+
+    if not quiet:
+        print(f"\n  데이터 로딩 및 배치 계산 중 (11종 × 45번호)... ", end="", flush=True)
     scored = compute_hybrid_scores(draws)
-    print("완료.\n")
-
-    # 1. 전체 데이터 테이블
-    print_full_table(scored)
-
-    # 2. 기술 지표 분석 패널 — 요구사항 1번에 의해 출력 삭제
-    # print_technical_panel(scored)
-
-    # 3. 고급 예측 엔진 6종 패널
-    print_engine_panel(scored)
-
-    # 4. 점수 분포 요약
-    print_score_distribution(scored)
-
-    # 5. 상위 6개 앙상블 상세 해석
-    print_top6_interpretation(scored)
-
-    # 6. 가중치 요약
-    print_weight_summary()
-
-    # 7. 번호 흐름 분석 — 회차 간 연결 구조 분석 (신규 추가)
-    print(f"\n  번호 흐름 분석 계산 중... ", end="", flush=True)
     flow_data = compute_flow_analysis(draws)
-    print("완료.\n")
-    print_flow_analysis(draws, scored, flow_data)
+    fused = compute_fused_ranking(scored, flow_data, flow_weight)
+    if not quiet:
+        print("완료.\n")
 
-    # 8. 흐름 분석 기반 번호별 선정 근거 최종 요약 (신규 추가)
-    print_flow_top6_reasoning(scored, draws, flow_data)
+        # 1. 전체 데이터 테이블
+        print_full_table(scored)
 
-    # 9. 면책 고지
-    print_disclaimer()
+        # 2. 기술 지표 분석 패널 — 요구사항 1번에 의해 출력 삭제
+        # print_technical_panel(scored)
+
+        # 3. 고급 예측 엔진 6종 패널
+        print_engine_panel(scored)
+
+        # 3-2. 엔진 중복 진단 (신규)
+        diagnose_engines(scored)
+
+        # 4. 점수 분포 요약
+        print_score_distribution(scored)
+
+        # 5. 상위 6개 순수 앙상블 상세 해석
+        print_top6_interpretation(scored)
+
+        # 6. 가중치 요약
+        print_weight_summary()
+
+        # 7. 번호 흐름 분석 — 회차 간 연결 구조 분석
+        print(f"\n  번호 흐름 분석 계산 완료 (융합 상위: "
+              f"{' '.join(f'{p['number']:02d}' for p in fused[:6])}).\n")
+        print_flow_analysis(draws, scored, flow_data)
+
+        # 8. 융합 랭킹 기반 번호별 선정 근거 최종 요약
+        print_flow_top6_reasoning(scored, draws, flow_data, fused, flow_weight)
+
+        # 9. 면책 고지
+        print_disclaimer()
+    return None
 
 
 if __name__ == "__main__":
-    main(n_rounds=100, seed=42)
+    import argparse
+    ap = argparse.ArgumentParser(description="로또 6/45 하이브리드 앙상블 + 흐름 융합 분석")
+    ap.add_argument("--rounds", type=int, default=100, help="샘플 회차 수 (기본 100)")
+    ap.add_argument("--seed", type=int, default=42, help="샘플 시드 (기본 42)")
+    ap.add_argument("--flow-weight", type=float, default=FLOW_WEIGHT_DEFAULT,
+                    help="융합 시 흐름 비중 0~1 (기본 0.25, 0=순수 앙상블)")
+    ap.add_argument("--history", type=str, default=None,
+                    help="실제 추첨 기록 JSON 경로")
+    ap.add_argument("--holdout", type=int, default=0,
+                    help="홀드아웃 백테스트 타깃 회차 수 (실데이터 전용)")
+    ap.add_argument("--topk", type=int, default=6, help="추천 조합 개수 (기본 6)")
+    ap.add_argument("--predict", action="store_true",
+                    help="패널 출력 없이 융합 추천 조합 1행만 출력")
+    args = ap.parse_args()
+    if args.predict:
+        draws = (load_draws_json(args.history) if args.history
+                 else make_sample_draws(n_rounds=args.rounds, seed=args.seed))
+        scored = compute_hybrid_scores(draws)
+        flow = compute_flow_analysis(draws)
+        rec = recommend_combination(scored, flow, args.flow_weight, args.topk)
+        print(" ".join(f"{n:02d}" for n in rec["numbers"]))
+    else:
+        main(n_rounds=args.rounds, seed=args.seed, flow_weight=args.flow_weight,
+             history_path=args.history, holdout=args.holdout, topk=args.topk)
