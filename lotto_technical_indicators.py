@@ -421,6 +421,10 @@ WEIGHTS = {
 }
 # 검증: sum(WEIGHTS.values()) == 1.00
 
+# 융합 시 흐름 점수 비중 기본값 (§5-7 compute_fused_ranking과 공유).
+# 모듈 상단에 두어 §5-1 테이블 함수 기본인자에서도 참조 가능하게 함.
+FLOW_WEIGHT_DEFAULT = 0.25  # CLI --flow-weight로 변경 가능
+
 def compute_hybrid_scores(draws: list[DrawResult]) -> list[ScoredNumber]:
     """
     모든 엔진 점수를 O(N) 배치로 계산하고 앙상블 종합 점수를 반환합니다.
@@ -502,13 +506,79 @@ def _level(score: float) -> str:
 
 # ── §5-1. 전체 데이터 테이블 ──────────────────────────────────────────────────
 
-def print_full_table(scored: list[ScoredNumber]) -> None:
+def compute_agreement(scored: list[ScoredNumber], threshold: float = 65.0) -> dict[int, int]:
+    """
+    번호별 엔진 합의 수 (11종 지표 중 threshold 이상인 지표 개수).
+    표의 '합의' 컬럼과 선택 조언의 근거로 사용합니다.
+    """
+    keys = ["s_z", "s_bb", "s_rsi", "s_ma", "s_aroon",
+            "s_qa", "s_qf", "s_np", "s_m3d", "s_iq", "s_ac"]
+    return {s.number: sum(1 for k in keys if getattr(s, k) >= threshold)
+            for s in scored}
+
+
+def compute_stability(draws: list[DrawResult],
+                      n_iter: int = 20,
+                      seed: int = 917,
+                      flow_weight: float = FLOW_WEIGHT_DEFAULT,
+                      topk: int = 6,
+                      frac: float = 0.8) -> dict[int, float] | None:
+    """
+    부트스트랩 안정도: 순서-preserving 80% 서브샘플을 n_iter회 반복하며
+    융합 상위 topk 진입 빈도를 측정합니다 (0~1).
+
+    [용도] 점수 0.007점 차이 같은 컷오프 임의성을 폭로합니다. 진입률 1.0이면
+    데이터 섭동에 강건한 선택, 0.5 근처면 동전 던지기와 다름없습니다.
+    예측 적중률이 아니라 "선택의 재현성"임에 유의하십시오.
+    draws < 30회면 None 반환 (엔진 최소 윈도우 미달).
+    """
+    if n_iter <= 0 or len(draws) < 30:
+        return None
+    rng = random.Random(seed)
+    m = max(20, int(len(draws) * frac))
+    counts = {n: 0 for n in range(1, 46)}
+    for _ in range(n_iter):
+        idx = sorted(rng.sample(range(len(draws)), m))  # 최신우선 순서 유지
+        sub = [draws[i] for i in idx]
+        try:
+            sc = compute_hybrid_scores(sub)
+            fl = compute_flow_analysis(sub)
+            fu = compute_fused_ranking(sc, fl, flow_weight)
+        except ValueError:
+            continue
+        for p in fu[:topk]:
+            counts[p["number"]] += 1
+    return {n: counts[n] / n_iter for n in range(1, 46)}
+
+
+def print_full_table(scored: list[ScoredNumber],
+                     flow_data: dict | None = None,
+                     fused: list[dict] | None = None,
+                     stability: dict[int, float] | None = None,
+                     flow_weight: float = FLOW_WEIGHT_DEFAULT) -> None:
     """
     📋 전체 데이터 테이블 — 1~45번 출현가능성 점수 전체
-    전통 지표 5종 + 고급 엔진 6종 + 앙상블 종합 점수를 한눈에 표시.
+
+    fused 전달 시: 융합 점수 기준 정렬 + 융합/합의/안정도 컬럼으로
+    "가져갈 번호"를 표에서 바로 판독할 수 있게 합니다.
+    미전달 시: 기존 레이아웃(앙상블 종합 기준)으로 동작합니다.
     """
+    comp_map = {s.number: s for s in scored}
+    if fused is not None:
+        order = [p["number"] for p in fused]  # 실제 선정 기준 = 융합 순위
+        fused_map = {p["number"]: p for p in fused}
+        ens_rank = {s.number: i + 1 for i, s in enumerate(scored)}
+        title = ("📋 전체 데이터 테이블 — 1~45번 출현가능성 점수 전체 "
+                 "(융합 순위순 = 실제 선정 순서)")
+    else:
+        order = [s.number for s in scored]
+        fused_map = {}
+        ens_rank = {}
+        title = "📋 전체 데이터 테이블 — 1~45번 출현가능성 점수 전체 (종합 점수 내림차순)"
+    agree = compute_agreement(scored)
+
     print("\n" + "=" * W)
-    print("  📋 전체 데이터 테이블 — 1~45번 출현가능성 점수 전체 (종합 점수 내림차순)".center(W))
+    print(f"  {title}".center(W))
     print("=" * W)
 
     hdr1 = (
@@ -523,29 +593,113 @@ def print_full_table(scored: list[ScoredNumber]) -> None:
         f"{'QA':>5} {'QF':>5} {'NP':>5} {'M3D':>5} {'IQ':>5} {'AC':>5}  "
         f"{'종합':>7}  {'신호'}"
     )
+    if fused is not None:
+        hdr1 += f"  {'── 선정 근거 ──────────':^22}"
+        hdr2 += f"  {'융합':>6} {'합의':>4} {'안정':>4}  {'판정'}"
     print(hdr1)
     print(hdr2)
     print("-" * W)
 
-    for rank, s in enumerate(scored, 1):
-        marker = "▶" if rank <= 6 else " "
-        print(
-            f"{marker}{rank:>3}  {s.number:>2}번  "
-            f"{s.s_z:>5.1f} {s.s_bb:>5.1f} {s.s_rsi:>5.1f} "
-            f"{s.s_ma:>5.1f} {s.s_aroon:>5.1f}  "
-            f"{s.s_qa:>5.1f} {s.s_qf:>5.1f} {s.s_np:>5.1f} "
-            f"{s.s_m3d:>5.1f} {s.s_iq:>5.1f} {s.s_ac:>5.1f}  "
-            f"{s.composite:>7.2f}  {_level(s.composite)}"
-        )
+    for rank, num in enumerate(order, 1):
+        s = comp_map[num]
+        if fused is not None:
+            p = fused_map[num]
+            gap = abs(ens_rank[num] - rank)
+            contested = gap >= 10
+            if rank <= 6:
+                tier = "▶확정"
+            elif rank <= 12:
+                tier = "◆차순"
+            elif rank > 39:
+                tier = "✕회피"
+            else:
+                tier = "·"
+            if contested:
+                tier += "※"
+            stab = stability or {}
+            stab_txt = f"{stab.get(num, -1):.0%}" if stab.get(num, -1) >= 0 else "─"
+            print(
+                f"{tier:>4}{rank:>3}  {num:>2}번  "
+                f"{s.s_z:>5.1f} {s.s_bb:>5.1f} {s.s_rsi:>5.1f} "
+                f"{s.s_ma:>5.1f} {s.s_aroon:>5.1f}  "
+                f"{s.s_qa:>5.1f} {s.s_qf:>5.1f} {s.s_np:>5.1f} "
+                f"{s.s_m3d:>5.1f} {s.s_iq:>5.1f} {s.s_ac:>5.1f}  "
+                f"{s.composite:>6.2f} {p['fused']:>6.2f} {agree[num]:>2}/11 {stab_txt:>4}"
+            )
+        else:
+            marker = "▶" if rank <= 6 else " "
+            print(
+                f"{marker}{rank:>3}  {s.number:>2}번  "
+                f"{s.s_z:>5.1f} {s.s_bb:>5.1f} {s.s_rsi:>5.1f} "
+                f"{s.s_ma:>5.1f} {s.s_aroon:>5.1f}  "
+                f"{s.s_qa:>5.1f} {s.s_qf:>5.1f} {s.s_np:>5.1f} "
+                f"{s.s_m3d:>5.1f} {s.s_iq:>5.1f} {s.s_ac:>5.1f}  "
+                f"{s.composite:>7.2f}  {_level(s.composite)}"
+            )
         if rank == 6:
             print("  " + "┄" * (W - 4))
 
     print("-" * W)
-    print(
-        "  ▶ = 앙상블 상위 6개 추천 번호\n"
-        "  컬럼: Z=Z-Score  BB=볼린저밴드  RSI  MA  Aroon  "
-        "QA=양자분석  QF=양자플럭스  NP=신경패턴  M3D=통합3D  IQ=통합양자  AC=클러스터"
-    )
+    if fused is not None:
+        margin = fused[5]["fused"] - fused[6]["fused"]
+        print(
+            "  ▶확정 = 융합 상위 6개(가져갈 번호)  ◆차순 = 7~12위(교체 후보)  "
+            "✕회피 = 하위 6개  ※ = 앙상블 순위와 10위 이상 엇갈림(의견 분열)\n"
+            "  합의 = 11종 지표 중 65점 이상 개수  안정 = subsample 재현율 "
+            f"(컷오프 격차: 6위−7위 = {margin:.3f}점"
+            f"{' → 경계! 7위가 언제든 뒤집힐 수 있음' if margin < 0.5 else ''})"
+        )
+    else:
+        print(
+            "  ▶ = 앙상블 상위 6개 추천 번호\n"
+            "  컬럼: Z=Z-Score  BB=볼린저밴드  RSI  MA  Aroon  "
+            "QA=양자분석  QF=양자플럭스  NP=신경패턴  M3D=통합3D  IQ=통합양자  AC=클러스터"
+        )
+
+
+def print_pick_advice(scored: list[ScoredNumber],
+                      fused: list[dict],
+                      stability: dict[int, float] | None,
+                      flow_weight: float = FLOW_WEIGHT_DEFAULT) -> None:
+    """
+    표 바로 다음에 "어떤 번호를 가져갈지"를 한 박스로 답합니다.
+    근거: 융합 순위 + 합의 수 + 안정도. 당첨 보장이 아님을 명시합니다.
+    """
+    agree = compute_agreement(scored)
+    ens_rank = {s.number: i + 1 for i, s in enumerate(scored)}
+    picks = fused[:6]
+    next2 = fused[6:8]
+    avoid = fused[-6:]
+    contested = [p for p in picks
+                 if abs(ens_rank[p["number"]] - (fused.index(p) + 1)) >= 10]
+
+    def tag(p: dict) -> str:
+        n = p["number"]
+        st = f"안정{stability[n]:.0%}" if stability else "안정미측정"
+        stars = "★" * round((stability[n] if stability else 0.5) * 3) or "☆"
+        return (f"{n:02d}번(융합{p['fused']:.1f}·합의{agree[n]}/11·{st}){stars}")
+
+    print("─" * W)
+    print("  ✅ 가져갈 번호 — 위 표 ▶확정 6개".center(W))
+    print("─" * W)
+    halves = [" — ".join(tag(p) for p in picks[:3]),
+              " — ".join(tag(p) for p in picks[3:])]
+    for h in halves:
+        print(f"  {h}")
+    print()
+    margin = picks[-1]["fused"] - next2[0]["fused"]
+    print(f"  🔄 교체 후보 (7~8위, 6위와 {margin:.3f}점 차"
+          f"{' — 사실상 동점, 취향대로 교체 가능' if margin < 0.5 else ''}): "
+          f"{' · '.join(tag(p) for p in next2)}")
+    if contested:
+        print(f"  ⚠️ 의견 분열 (앙상블과 10위 이상 엇갈림 — 신중): "
+              f"{', '.join(f'{p['number']:02d}번' for p in contested)}")
+    print(f"  ✕ 낮게 평가된 번호 (참고용, 배제의 근거 아님): "
+          f"{' · '.join(f'{p['number']:02d}번' for p in avoid)}")
+    print()
+    print("  ※ 이 선택은 '모델이 선호하고 재현되는' 번호이지 '나올' 번호가 아닙니다.")
+    print("  ※ 컷오프 격차가 0.5점 미만이면 6~8위는 사실상 동점입니다.")
+    print()
 
 
 # ── §5-2. 기술 지표 분석 패널 ────────────────────────────────────────────────
@@ -1326,8 +1480,6 @@ def print_flow_analysis(draws: list[DrawResult],
 # 당첨 확률 개선을 의미하지 않습니다.
 # ════════════════════════════════════════════════════════════════════════════════
 
-FLOW_WEIGHT_DEFAULT = 0.25  # 융합 시 흐름 점수 비중 (CLI --flow-weight로 변경 가능)
-
 FLOW_TREND_SCORES = {
     "급락": 100.0,   # 강한 회귀 기대
     "하락": 75.0,
@@ -1672,6 +1824,7 @@ def main(n_rounds: int = 100, seed: int = 42,
          history_path: str | None = None,
          holdout: int = 0,
          topk: int = 6,
+         stability_iters: int = 20,
          quiet: bool = False) -> None:
     if history_path:
         draws = load_draws_json(history_path)
@@ -1702,11 +1855,14 @@ def main(n_rounds: int = 100, seed: int = 42,
     scored = compute_hybrid_scores(draws)
     flow_data = compute_flow_analysis(draws)
     fused = compute_fused_ranking(scored, flow_data, flow_weight)
+    stability = compute_stability(draws, n_iter=stability_iters,
+                                  flow_weight=flow_weight, topk=topk)
     if not quiet:
         print("완료.\n")
 
-        # 1. 전체 데이터 테이블
-        print_full_table(scored)
+        # 1. 전체 데이터 테이블 (융합 순위순 + 선정 근거 컬럼 + 선택 조언)
+        print_full_table(scored, flow_data, fused, stability, flow_weight)
+        print_pick_advice(scored, fused, stability, flow_weight)
 
         # 2. 기술 지표 분석 패널 — 요구사항 1번에 의해 출력 삭제
         # print_technical_panel(scored)
@@ -1751,6 +1907,8 @@ if __name__ == "__main__":
     ap.add_argument("--holdout", type=int, default=0,
                     help="홀드아웃 백테스트 타깃 회차 수 (실데이터 전용)")
     ap.add_argument("--topk", type=int, default=6, help="추천 조합 개수 (기본 6)")
+    ap.add_argument("--stability-iters", type=int, default=20,
+                    help="안정도 부트스트랩 반복 수 (기본 20, 0=미측정)")
     ap.add_argument("--predict", action="store_true",
                     help="패널 출력 없이 융합 추천 조합 1행만 출력")
     args = ap.parse_args()
@@ -1763,4 +1921,5 @@ if __name__ == "__main__":
         print(" ".join(f"{n:02d}" for n in rec["numbers"]))
     else:
         main(n_rounds=args.rounds, seed=args.seed, flow_weight=args.flow_weight,
-             history_path=args.history, holdout=args.holdout, topk=args.topk)
+             history_path=args.history, holdout=args.holdout, topk=args.topk,
+             stability_iters=args.stability_iters)
