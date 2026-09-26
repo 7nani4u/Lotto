@@ -1186,7 +1186,51 @@ export function classifyRecentlyBack(results: LottoResult[]): number[] {
   return back;
 }
 
+import { unifiedQuantumEngine645 } from './formulas/index';
+
 export type TierKey = 'pick' | 'next' | 'avoid' | 'mid';
+
+export interface SecondOpinion {
+  numbers: number[];         // 통합 엔진 Top6 (오름차순)
+  fusedTop6: number[];       // 융합 랭킹 Top6 (오름차순)
+  overlap: number;           // 교집합 개수
+  shared: number[];          // 공통 번호 (오름차순)
+  uniqueToUnified: number[]; // 통합 스택에만 있는 번호
+}
+
+/**
+ * 세컨드 오피니언 — services/formulas 5엔진 통합 스택을 라이브 예측과 병렬 실행.
+ *
+ * [도입 이유] formulas/는 라이브와 같은 6/45 예측 스택이었으나 어디에서도
+ * 호출되지 않는 데드코드였습니다. 삭제 대신 융합 Top6와의 일치도를 공개해
+ * 스택 간 다변화 신호로 활용합니다. 일치도가 높으면 선택이 강건하고,
+ * 낮으면 모델 의존적이라는 의미이며, 어느 쪽도 적중률 우위가 아닙니다.
+ * 30회차 미만이면 QA 가드가 0점을 반환해 [1..6] 퇴화가 나오므로 null.
+ */
+export function secondOpinion645(
+  results: LottoResult[],
+  table?: FullIndicatorAnalysis[] | null,
+  flow?: FlowSignals | null,
+  flowWeight: number = FLOW_WEIGHT_DEFAULT,
+): SecondOpinion | null {
+  if (!results || results.length < 30) return null;
+  const t = table && table.length > 0
+    ? table
+    : (results.length >= 10 ? buildFullAnalysisTable(results) : []);
+  if (t.length === 0) return null;
+  const f = flow ?? buildFlowSignals(results);
+  const fusedTop6 = buildFusedTable(t, f, flowWeight)
+    .slice(0, 6).map(r => r.number).sort((a, b) => a - b);
+  const numbers = unifiedQuantumEngine645.predict(results).numbers;
+  const shared = numbers.filter(n => fusedTop6.includes(n)).sort((a, b) => a - b);
+  return {
+    numbers,
+    fusedTop6,
+    overlap: shared.length,
+    shared,
+    uniqueToUnified: numbers.filter(n => !fusedTop6.includes(n)).sort((a, b) => a - b),
+  };
+}
 
 export interface FusedRow {
   number: number;

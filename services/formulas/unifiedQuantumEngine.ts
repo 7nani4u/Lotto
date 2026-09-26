@@ -8,7 +8,12 @@ import { multiDimensionalMarkov645 } from './deepLearning3D';
 
 export const unifiedQuantumEngine645 = {
   name: "Unified Quantum Analysis Engine (통합 양자 앙상블 엔진)",
-  
+
+  // 방향 규약: 5개 엔진 모두 "높을수록 회귀 기대(과소출현)" 방향으로 정규화됨.
+  // QF/NP는 역전 후 정규화, M3D만 모멘텀 방향(다변화 의도). 가중합 시 상쇄가
+  // 아닌 보완이 되도록 유지할 것.
+  // 집계 규약: 한국 6/45 본번호 6개 (보너스 제외). 라이브 스택(7개)과 정의가
+  // 다르므로 점수 직접 비교 금지, 순위 일치도로만 비교할 것.
   predict: (results: LottoResult[]): { numbers: number[], scores: { number: number, score: number }[] } => {
     const engines: Engine645[] = [
       quantumFlux645,              // 흐름, 이월수, 이웃수

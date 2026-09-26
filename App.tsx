@@ -12,6 +12,7 @@ import {
   buildFlowSignals,
   buildFusedTable,
   computeStability,
+  secondOpinion645,
   classifyRecentlyBack,
   classifySegmentTrend,
   FLOW_WEIGHT_DEFAULT,
@@ -865,6 +866,33 @@ const App: React.FC = () => {
                   );
                 })}
               </div>
+
+              {/* 세컨드 오피니언 — 5엔진 통합 스택 Top6와 융합 Top6의 일치도 */}
+              {(() => {
+                const so = secondOpinion645(allData, indicatorTable, flowSignals, FLOW_WEIGHT_DEFAULT);
+                if (!so) return null;
+                return (
+                  <div className="mb-6 rounded-xl border border-indigo-800/50 bg-indigo-950/30 p-3">
+                    <div className="text-[11px] font-bold text-indigo-300 mb-2 flex items-center gap-1.5">
+                      <span>🔀</span> 세컨드 오피니언 — 독립 스택 Top6 · 융합 Top6와 {so.overlap}개 일치
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {so.numbers.map(n => (
+                        <span key={n}
+                              onClick={() => handleBallClick(n)}
+                              className="cursor-pointer hover:scale-110 transition-transform inline-block"
+                              title={so.shared.includes(n) ? '융합 Top6와 공통' : '통합 스택 고유'}>
+                          <Ball num={n} small />
+                        </span>
+                      ))}
+                      <span className="text-[10px] text-gray-500 ml-1">
+                        공통: {so.shared.length > 0 ? so.shared.join(', ') : '없음'} · 고유: {so.uniqueToUnified.length > 0 ? so.uniqueToUnified.join(', ') : '없음'}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-gray-600 mt-1.5">스택 간 다변화 신호이며 적중률 우위를 의미하지 않습니다.</div>
+                  </div>
+                );
+              })()}
 
               {/* 전체 테이블 토글 */}
               <div className="border border-gray-700 rounded-xl overflow-hidden">

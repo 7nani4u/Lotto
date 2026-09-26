@@ -93,8 +93,12 @@ def make_sample_draws(n_rounds: int = 100, seed: int = 42) -> list[DrawResult]:
     for rnd in range(1, n_rounds + 1):
         pool = list(range(1, 46))
         rng.shuffle(pool)
-        picks = sorted(pool[:7])
-        draws.append(DrawResult(round=rnd, numbers=picks[:6], bonus=picks[6]))
+        # [수정] 셔플된 앞 6개를 본번호, 7번째를 보너스로 (정렬 전 분할).
+        # 기존에는 정렬 후 앞 6개를 취해 보너스가 항상 최대값, 본번호가
+        # 저구간 편향되는 구조적 편향이 있었음. 실제 추첨(순서 무관 6+1)과
+        # 동일한 분포가 되도록 수정. 표시는 오름차순 정렬.
+        mains = sorted(pool[:6])
+        draws.append(DrawResult(round=rnd, numbers=mains, bonus=pool[6]))
     draws.reverse()
     return draws
 
