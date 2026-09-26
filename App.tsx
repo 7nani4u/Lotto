@@ -13,6 +13,7 @@ import {
   buildFusedTable,
   computeStability,
   secondOpinion645,
+  buildLongAbsentDetails,
   classifyRecentlyBack,
   classifySegmentTrend,
   FLOW_WEIGHT_DEFAULT,
@@ -262,6 +263,12 @@ const App: React.FC = () => {
       ? buildFusedTable(indicatorTable, flowSignals, FLOW_WEIGHT_DEFAULT, stabilityMap)
       : []),
     [indicatorTable, flowSignals, stabilityMap],
+  );
+
+  // ── 장기 대기 심층 (⏳ 섹션 근거: 미출 기간·평균·조건부 재출현율)
+  const absenceReport = useMemo(
+    () => buildLongAbsentDetails(allData, 10, 10),
+    [allData],
   );
 
   const handleGenerateQuantum = async () => {
@@ -1088,37 +1095,74 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* 3. 장기 대기 번호 */}
-              {longAbsent.length > 0 && (
+              {/* 3. 장기 대기 번호 — 심층 분석 (미출 기간·평균·조건부 재출현율) */}
+              {absenceReport && absenceReport.details.length > 0 && (() => {
+                const fmtPct = (v: number | null) => (v === null ? '─' : `${(v * 100).toFixed(0)}%`);
+                const gradeBadge: Record<string, string> = {
+                  A: 'text-red-300 bg-red-900/50 border border-red-700/60',
+                  B: 'text-yellow-300 bg-yellow-900/40 border border-yellow-700/60',
+                  C: 'text-gray-400 bg-gray-700/50 border border-gray-600/50',
+                };
+                return (
                 <div className="mb-6">
-                  <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
+                  <div className="text-xs font-bold text-gray-400 mb-1.5 flex items-center gap-1.5">
                     <span>⏳</span> 장기 대기 번호 — 10회차 이상 미출현 (초과율 높은 순)
                   </div>
-                  <div className="bg-gray-900/80 rounded-xl border border-gray-700/60 p-4 space-y-2">
-                    {longAbsent.map(item => {
-                      const pct = Math.min(100, ((item.overdueRatio - 1) / 4) * 100);
-                      const barCls  = item.overdueRatio >= 3 ? 'bg-red-500' : item.overdueRatio >= 2 ? 'bg-orange-500' : 'bg-yellow-500';
-                      const textCls = item.overdueRatio >= 3 ? 'text-red-300' : item.overdueRatio >= 2 ? 'text-orange-300' : 'text-yellow-300';
+                  <div className="text-[11px] text-gray-500 mb-3">
+                    다음 회차에 이 집합 중 1개 이상 출현 — 균등가정 {(absenceReport.nullProbNext * 100).toFixed(1)}% ·
+                    과거 실측 {absenceReport.empiricalNextRate === null
+                      ? `표본 부족 (${absenceReport.empiricalSamples}건)`
+                      : `${(absenceReport.empiricalNextRate * 100).toFixed(1)}% (${absenceReport.empiricalSamples}건)`}
+                  </div>
+                  <div className="bg-gray-900/80 rounded-xl border border-gray-700/60 p-4 space-y-3">
+                    {absenceReport.details.map(d => {
+                      const pct = Math.min(100, ((d.overdueRatio - 1) / 4) * 100);
+                      const barCls  = d.overdueRatio >= 3 ? 'bg-red-500' : d.overdueRatio >= 2 ? 'bg-orange-500' : 'bg-yellow-500';
+                      const textCls = d.overdueRatio >= 3 ? 'text-red-300' : d.overdueRatio >= 2 ? 'text-orange-300' : 'text-yellow-300';
                       return (
-                        <div key={item.number} className="flex items-center gap-3 cursor-pointer" onClick={() => handleBallClick(item.number)}>
-                          <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs flex-shrink-0 bg-gray-700 text-gray-200">
-                            {item.number}
-                          </div>
-                          <div className="flex-1">
-                            <div className="flex items-center justify-between mb-0.5">
-                              <span className="text-[10px] text-gray-500">{item.curGap}회 대기 / 평균 {item.avgGap}회</span>
-                              <span className={`text-[11px] font-bold ${textCls}`}>{item.overdueRatio.toFixed(1)}×</span>
+                        <div key={d.number}>
+                          <div className="flex items-center gap-2 cursor-pointer" onClick={() => handleBallClick(d.number)}>
+                            <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs flex-shrink-0 bg-gray-700 text-gray-200">
+                              {d.number}
                             </div>
-                            <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full ${barCls}`} style={{ width: `${pct}%` }} />
+                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${gradeBadge[d.grade]}`}
+                                  title={d.grade === 'A' ? '초과 2배+ · 주기적' : d.grade === 'B' ? '초과 또는 주기적' : '그 외'}>
+                              {d.grade}
+                            </span>
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between mb-0.5 gap-2">
+                                <span className="text-[10px] text-gray-500">{d.curGap}회 대기 (약 {d.curWeeks}주) / 평균 {d.avgGap}회</span>
+                                <span className={`text-[11px] font-bold ${textCls}`}>{d.overdueRatio.toFixed(1)}×</span>
+                              </div>
+                              <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                                <div className={`h-full rounded-full ${barCls}`} style={{ width: `${pct}%` }} />
+                              </div>
+                              <div className="text-[10px] text-gray-500 mt-1">
+                                장기평균 {d.avgLongSpell === null ? '─' : `${d.avgLongSpell}회`} ·
+                                역대최장 {d.maxSpell === null ? '─' : `${d.maxSpell}회`} ({d.longSpellCount}건) ·
+                                주기 {d.isPeriodic ? `규칙적(CV ${d.cv})` : `불규칙(CV ${d.cv})`}
+                              </div>
+                              <div className="text-[10px] text-gray-500">
+                                재출현율 1회 {fmtPct(d.reappear1)} · 3회 {fmtPct(d.reappear3)} (표본 {d.reappearSamples}건{d.reappearSamples < 3 ? ' — 부족' : ''}) ·
+                                앙코르 {fmtPct(d.encoreRate)} ({d.encoreSamples}건)
+                              </div>
+                              {d.coReturn.length > 0 && (
+                                <div className="text-[10px] text-gray-500">
+                                  동반 복귀: {d.coReturn.map(c => `${c.number}번 ${c.count}회`).join(' · ')}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
                       );
                     })}
                   </div>
+                  <div className="text-[10px] text-gray-600 mt-1.5">
+                    율값은 과거 동일 대기 깊이 도달 사례 기준이며 표본 3건 미만은 ─ 표시. 등급은 서술용(확률 아님).
+                  </div>
                 </div>
-              )}
+                );
+              })()}
 
               {/* 4. 상위 6개 번호 흐름 근거 (융합 선정 + 디테일 흐름) */}
               <div>

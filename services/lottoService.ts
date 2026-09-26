@@ -1169,9 +1169,236 @@ export function buildFlowSignals(results: LottoResult[]): FlowSignals | null {
   return { trends, gapInfo, connectionScores, flowScores };
 }
 
+// ==========================================
+// 4.8. LONG-ABSENT DETAIL (⏳ 장기 대기 번호 심층 분석)
+// ==========================================
+//
+// 미출 기간·평균·조건부 재출현율을 과거 데이터에서 직접 계산합니다.
+// - 미출/재출현 판정은 7개 번호(보너스 포함) 기준 (gapInfo와 동일 정의).
+// - 단, "다음 회차 적중" 판정은 본번호 6개 기준 (1등 예측 대상).
+// - 모든 율값은 관측 표본 수와 함께 반환하며, 표본 3건 미만이면 null
+//   (추정 불가 — 0%나 100%로 표시하지 않음).
+// - 집합 확률 nullProbNext는 균등무작위 가정 하의 정확값
+//   1 − C(45−m,6)/C(45,6)이며, empiricalNextRate는 walk-forward 실측.
+// ==========================================
+
+export interface CoReturnEntry {
+  number: number;
+  count: number;
+}
+
+export interface AbsenceDetail {
+  number: number;
+  curGap: number;            // 현재 미출 (회차) — 상한 없이 전수 탐색
+  curWeeks: number;          // 주 1회 추첨 환산 약 N주
+  avgGap: number;            // 전 기간 평균 출현 간격
+  avgLongSpell: number | null; // 장기(10회+) 미출 spell 평균 (없으면 null)
+  maxSpell: number | null;     // 역대 최장 미출 (장기 spell 기준)
+  longSpellCount: number;      // 관측된 장기 spell 수
+  overdueRatio: number;        // curGap / avgGap
+  cv: number;                  // 간격 변동계수 (낮을수록 주기적)
+  isPeriodic: boolean;         // cv < 0.35
+  reappear1: number | null;    // 현재 대기 깊이 도달 시 다음 1회 내 재출현율
+  reappear3: number | null;    // 다음 3회 내 재출현율
+  reappearSamples: number;     // 조건부 관측 표본 수
+  encoreRate: number | null;   // 장기 미출 종료 후 2회 내 재출현(앙코르)율
+  encoreSamples: number;
+  coReturn: CoReturnEntry[];   // 장기 미출 종료 회차의 동반 출현 상위 3
+  grade: 'A' | 'B' | 'C';      // 초과율×주기성 결합 서술 등급 (확률 아님)
+}
+
+export interface LongAbsentReport {
+  details: AbsenceDetail[];   // 초과율 내림차순, 상위 topN
+  setSize: number;
+  nullProbNext: number;       // 균등가정 시 다음 회차 집합 중 1개+ 출현 정확 확률
+  empiricalNextRate: number | null; // walk-forward 실측 (표본 부족 시 null)
+  empiricalSamples: number;
+}
+
+function comb645(n: number, k: number): number {
+  if (k < 0 || k > n) return 0;
+  k = Math.min(k, n - k);
+  let r = 1;
+  for (let i = 0; i < k; i++) r = (r * (n - i)) / (i + 1);
+  return r;
+}
+
+export function buildLongAbsentDetails(
+  results: LottoResult[],
+  minGap: number = 10,
+  topN: number = 10,
+): LongAbsentReport | null {
+  const L = results?.length ?? 0;
+  if (!results || L < 30) return null;
+  const appears = (idx: number, n: number) => {
+    const d = results[idx];
+    return d.numbers.includes(n) || d.bonus === n;
+  };
+
+  // oldest-first 순서 (rev[t], t=0이 가장 오래됨)
+  const at = (t: number, n: number) => appears(L - 1 - t, n);
+  const mainsAt = (t: number) => results[L - 1 - t].numbers;
+
+  const details: AbsenceDetail[] = [];
+
+  for (let n = 1; n <= 45; n++) {
+    // ── 패스 1: spell 수집 + 현재 미출 ──
+    const spells: number[] = [];   // 완결된 미출 spell 길이 (오래된 순)
+    const spellEndMain: number[][] = []; // 각 spell 종료 회차의 본번호 6개
+    let a = 0;
+    for (let t = 0; t < L; t++) {
+      if (at(t, n)) {
+        if (a > 0) { spells.push(a); spellEndMain.push([...mainsAt(t)]); }
+        a = 0;
+      } else {
+        a++;
+      }
+    }
+    const curGap = a; // trailing 미출 (상한 없음)
+    if (curGap < minGap) continue;
+
+    // 전 기간 출현 간격 (연속 출현 인덱스 차이)
+    const appIdx: number[] = [];
+    for (let t = 0; t < L; t++) if (at(t, n)) appIdx.push(t);
+    const gaps: number[] = [];
+    for (let i = 0; i + 1 < appIdx.length; i++) gaps.push(appIdx[i + 1] - appIdx[i]);
+    const avgGap = gaps.length > 0
+      ? gaps.reduce((x, y) => x + y, 0) / gaps.length
+      : 45 / 7;
+    const stdGap = gaps.length >= 2
+      ? Math.sqrt(gaps.reduce((s, g) => s + (g - avgGap) ** 2, 0) / gaps.length)
+      : avgGap;
+    const cv = avgGap > 0 ? stdGap / avgGap : 1;
+
+    const longIdx = spells
+      .map((len, i) => ({ len, i }))
+      .filter(s => s.len >= minGap);
+    const avgLongSpell = longIdx.length > 0
+      ? longIdx.reduce((s, x) => s + x.len, 0) / longIdx.length
+      : null;
+    const maxSpell = longIdx.length > 0
+      ? Math.max(...longIdx.map(x => x.len))
+      : null;
+
+    // ── 패스 2: 현재 깊이 G 도달 에피소드의 조건부 재출현율 (겹침 방지 점프) ──
+    const G = curGap;
+    let hit1 = 0, hit3 = 0, samples = 0;
+    {
+      let t = 0, run = 0;
+      while (t < L) {
+        if (at(t, n)) { run = 0; t++; continue; }
+        run++;
+        if (run === G) {
+          // t가 G연속 미출의 마지막 회차. 다음 3회(더 최신, t+1...)까지
+          // 전부 관측 가능할 때만 기록 → 1회/3회율이 동일 분모 공유.
+          // 기록 여부와 무관하게 spell 끝까지 점프 (미진행 무한루프 방지).
+          if (t + 3 < L) {
+            samples++;
+            if (at(t + 1, n)) { hit1++; hit3++; }
+            else if (at(t + 2, n) || at(t + 3, n)) { hit3++; }
+          }
+          // spell 끝까지 점프 (겹침 방지). 끝이 없으면(현재 진행 중) 종료
+          let j = t + 1;
+          while (j < L && !at(j, n)) j++;
+          if (j >= L) break;
+          t = j + 1; run = 0;
+          continue;
+        }
+        t++;
+      }
+    }
+
+    // ── 앙코르율: 장기 spell 종료 후 2회 내 재출현 ──
+    let encHit = 0, encN = 0;
+    {
+      // spell 종료 위치 재탐색 (오래된 순)
+      let t = 0, run = 0;
+      while (t < L) {
+        if (at(t, n)) {
+          if (run >= minGap && t + 2 < L) {
+            encN++;
+            if (at(t + 1, n) || at(t + 2, n)) encHit++;
+          }
+          run = 0; t++; continue;
+        }
+        run++; t++;
+      }
+    }
+
+    // ── 동반 복귀: 장기 spell 종료 회차의 본번호 공출현 집계 ──
+    const coMap = new Map<number, number>();
+    longIdx.forEach(({ i }) => {
+      for (const m of spellEndMain[i]) {
+        if (m === n) continue;
+        coMap.set(m, (coMap.get(m) ?? 0) + 1);
+      }
+    });
+    const coReturn = [...coMap.entries()]
+      .map(([number, count]) => ({ number, count }))
+      .sort((x, y) => y.count - x.count || x.number - y.number)
+      .slice(0, 3);
+
+    const overdueRatio = avgGap > 0 ? curGap / avgGap : 0;
+    const isPeriodic = cv < 0.35;
+    const grade: 'A' | 'B' | 'C' =
+      overdueRatio >= 2 && isPeriodic ? 'A'
+      : overdueRatio >= 1.2 || isPeriodic ? 'B' : 'C';
+
+    details.push({
+      number: n,
+      curGap,
+      curWeeks: curGap, // 주 1회 추첨 환산
+      avgGap: +avgGap.toFixed(1),
+      avgLongSpell: avgLongSpell === null ? null : +avgLongSpell.toFixed(1),
+      maxSpell,
+      longSpellCount: longIdx.length,
+      overdueRatio: +overdueRatio.toFixed(2),
+      cv: +cv.toFixed(2),
+      isPeriodic,
+      reappear1: samples >= 3 ? +(hit1 / samples).toFixed(3) : null,
+      reappear3: samples >= 3 ? +(hit3 / samples).toFixed(3) : null,
+      reappearSamples: samples,
+      encoreRate: encN >= 3 ? +(encHit / encN).toFixed(3) : null,
+      encoreSamples: encN,
+      coReturn,
+      grade,
+    });
+  }
+
+  details.sort((x, y) => y.overdueRatio - x.overdueRatio || x.number - y.number);
+  const top = details.slice(0, topN);
+  const m = top.length;
+
+  // ── 집합 지표: 균등가정 정확 확률 + walk-forward 실측 ──
+  const nullProbNext = m > 0 ? 1 - comb645(45 - m, 6) / comb645(45, 6) : 0;
+  let empHit = 0, empN = 0;
+  for (let i = 1; i + minGap - 1 < L; i++) {
+    // draws[i] 기준 과거 minGap회 전원 미출 집합 (i와 그보다 오래된 회차)
+    const set: number[] = [];
+    for (let n = 1; n <= 45; n++) {
+      let absent = true;
+      for (let k = 0; k < minGap; k++) {
+        if (appears(i + k, n)) { absent = false; break; }
+      }
+      if (absent) set.push(n);
+    }
+    if (set.length === 0) continue;
+    empN++;
+    const nextMains = results[i - 1].numbers; // 다음(최신 방향) 회차 본번호
+    if (nextMains.some(x => set.includes(x))) empHit++;
+  }
+
+  return {
+    details: top,
+    setSize: m,
+    nullProbNext: +nullProbNext.toFixed(4),
+    empiricalNextRate: empN >= 20 ? +(empHit / empN).toFixed(4) : null,
+    empiricalSamples: empN,
+  };
+}
+
+// Python compute_flow_analysis() 와 동일: 최근 3회 내 출현 + 그 이전 5회 이상 공백.
 export function classifyRecentlyBack(results: LottoResult[]): number[] {
-  // Python compute_flow_analysis() 와 동일: 최근 3회 내 출현 + 그 이전 5회 이상 공백.
-  // (기존 사이트식은 평균간격 기반 다른 정의였음 — 여기로 통일.)
   const appears = (d: LottoResult, n: number) => d.numbers.includes(n) || d.bonus === n;
   const back: number[] = [];
   for (let n = 1; n <= 45; n++) {
