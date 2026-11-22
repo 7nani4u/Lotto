@@ -1,0 +1,306 @@
+--- services/lottoService.before_audit_20261121.ts	2026-11-21 21:12:10.891252800 +0900
++++ services/lottoService.ts	2026-11-21 21:45:45.651568300 +0900
+@@ -1752,7 +1752,7 @@
+ const ADVANCED_SUM_MAX = 189;
+ 
+ const PYTHON_FILTER_FORMULAS = [
+-  'AC산술복잡도', '합46(Sum46)', '상/하위 비율', '연속번호 제한',
++  'AC산술복잡도', '합46(Sum46, AC에 포함)', '상/하위 비율', '연속번호 제한',
+   `총합(${ADVANCED_SUM_MIN}~${ADVANCED_SUM_MAX})`, '번대별 분산',
+ ];
+ 
+@@ -1763,19 +1763,98 @@
+   return { numbers, confidence, formulasUsed: Array.from(new Set(formulasUsed)), selectionReason, stats: { sum, oddEvenRatio: `${odd}:${even}`, highLowRatio: `${high}:${low}` } };
+ }
+ 
+-function passesPythonFilters(numbers: number[]): boolean {
++/**
++ * 명세(reference) 판정 — isValidXxx 함수의 합성. 비정상 입력(6개가 아니거나 중복·범위 밖)과
++ * 동등성 검증(audit/verify_filters_ts.mjs)의 기준으로 유지합니다.
++ */
++function passesPythonFiltersSpec(numbers: number[]): boolean {
+   const sum = numbers.reduce((a, b) => a + b, 0);
+   return sum >= ADVANCED_SUM_MIN && sum <= ADVANCED_SUM_MAX &&
+     isValidAC(numbers) && isValidSum46(numbers) &&
+     isValidRatio(numbers) && isValidRangePattern(numbers) && isValidConsecutive(numbers);
+ }
+ 
++const AC_SEEN = new Int32Array(46);
++let acStamp = 0;
++
++/**
++ * 고속 판정 — 오름차순·서로 다른 6개·1~45 입력 전용 (Python generate_lotto_combinations.passes_all_filters 와 동일 로직).
++ *  · Sum46 제외: 전수 8,145,060개 실측으로 Sum46 탈락 1,540개의 AC가 전부 0~4 (AC<5) → AC 탈락에 100% 포함.
++ *    (증명: 합 46 쌍이 3개면 6개 수는 a,46-a,b,46-b,c,46-c 형태 → 거울대칭으로 15개 차이값이 최대 9종 → AC≤4)
++ *  · 정렬·배열 복사·Set 생성 없이 1회 판정, 값싼 필터(총합·비율·번대·연속)를 앞에 두고 AC를 마지막에 둠.
++ *  · 비율은 부동소수 나눗셈 대신 정수 교차곱 (hi·10 ≥ lo·13, hi·2 ≤ lo·15) — 판정 동일.
++ */
++function passesPythonFiltersSorted(s: number[]): boolean {
++  return passesSixSorted(s[0], s[1], s[2], s[3], s[4], s[5]);
++}
++
++/** AC 차이값 표시: 처음 보는 차이값이면 1, 이미 본 값이면 0 (stamp 방식이라 매 호출 초기화 불필요) */
++function acNew(dv: number, stamp: number): number {
++  if (AC_SEEN[dv] === stamp) return 0;
++  AC_SEEN[dv] = stamp;
++  return 1;
++}
++
++/** 배열 할당 없는 숫자 6개 버전 — 필터 통과 풀(buildFilteredPool) 전수 열거의 핫패스. 논리는 위 설명과 동일. */
++function passesSixSorted(a: number, b: number, c: number, d: number, e: number, f: number): boolean {
++  const sum = a + b + c + d + e + f;
++  if (sum < ADVANCED_SUM_MIN || sum > ADVANCED_SUM_MAX) return false;
++
++  const lo = a + b + c;
++  const hi = sum - lo;
++  if (hi * 10 < lo * 13 || hi * 2 > lo * 15) return false;
++
++  // 같은 번대(1~10, 11~20, …, 41~45)에 4개 이상 ⇔ 정렬 상 (a,d)·(b,e)·(c,f) 중 한 쌍이 같은 번대
++  if (Math.floor((a - 1) / 10) === Math.floor((d - 1) / 10) ||
++      Math.floor((b - 1) / 10) === Math.floor((e - 1) / 10) ||
++      Math.floor((c - 1) / 10) === Math.floor((f - 1) / 10)) return false;
++
++  // 연속: 3연속 금지, 2연속 쌍 최대 2개
++  let pairs = 0;
++  if (b === a + 1) { pairs++; if (c === a + 2) return false; }
++  if (c === b + 1) { pairs++; if (d === b + 2) return false; }
++  if (d === c + 1) { pairs++; if (e === c + 2) return false; }
++  if (e === d + 1) { pairs++; if (f === d + 2) return false; }
++  if (f === e + 1) pairs++;
++  if (pairs > 2) return false;
++
++  // AC = (서로 다른 차이값 수) − 5, 5 ≤ AC ≤ 10  → 서로 다른 차이값 10~15개
++  if (++acStamp >= 0x7fffffff) { AC_SEEN.fill(0); acStamp = 1; }
++  const stamp = acStamp;
++  const distinct =
++    acNew(b - a, stamp) + acNew(c - a, stamp) + acNew(d - a, stamp) + acNew(e - a, stamp) + acNew(f - a, stamp) +
++    acNew(c - b, stamp) + acNew(d - b, stamp) + acNew(e - b, stamp) + acNew(f - b, stamp) +
++    acNew(d - c, stamp) + acNew(e - c, stamp) + acNew(f - c, stamp) +
++    acNew(e - d, stamp) + acNew(f - d, stamp) +
++    acNew(f - e, stamp);
++  return distinct >= 10 && distinct <= 15;
++}
++
++function isStrictlyAscending(arr: number[]): boolean {
++  for (let i = 1; i < arr.length; i++) if (!(arr[i] > arr[i - 1])) return false;
++  return true;
++}
++
++function passesPythonFilters(numbers: number[]): boolean {
++  if (numbers.length === 6) {
++    const s = isStrictlyAscending(numbers) ? numbers : [...numbers].sort((x, y) => x - y);
++    // 정상 입력(서로 다른 6개, 1~45)만 고속 경로. 그 외는 명세 판정(Sum46 포함)으로 처리해 결과를 보존.
++    if (s[0] >= 1 && s[5] <= 45 && isStrictlyAscending(s)) return passesPythonFiltersSorted(s);
++  }
++  return passesPythonFiltersSpec(numbers);
++}
++
+ function generateFallbackNumbers(): number[] {
+   const selected = new Set<number>();
+   while (selected.size < 6) selected.add(Math.floor(Math.random() * 45) + 1);
+   return Array.from(selected).sort((a, b) => a - b);
+ }
+ 
++/**
++ * @deprecated 앱은 더 이상 이 함수를 쓰지 않습니다 — buildFilteredPoolAsync() 로 필터 통과 풀을 로컬에서 직접 만듭니다.
++ * 저장소의 lotto_combinations.txt 는 전체 유효 공간의 1.9 % 부분집합(번호 1·2·45 없음)이었고, 올바른 전체 파일은
++ * 114.3 MiB 라 GitHub 한도(100 MiB)를 넘습니다(audit/FILTER_AUDIT_REPORT.md 참조). 하위 호환을 위해 export 만 유지합니다.
++ */
+ export async function fetchGithubCombinations(): Promise<number[][]> {
+   try {
+     const url = 'https://raw.githubusercontent.com/7nani4u/Lotto/main/lotto_combinations.txt';
+@@ -1798,6 +1877,159 @@
+ }
+ 
+ // ==========================================
++// 9.5 FILTERED COMBINATION POOL (경로 A 후보 풀 — 네트워크 파일 대체)
++// ==========================================
++/**
++ * 필터(passesPythonFilters)를 통과하는 모든 조합을 6바이트씩 연속 저장한 압축 풀.
++ * rows[6*i .. 6*i+5] = i번째 조합(오름차순). 순서는 사전식(= Python generate_lotto_combinations 출력 순서)과 같습니다.
++ * 현행 필터 기준 6,657,176개 × 6B ≈ 40 MB (number[][] 로 만들면 수백 MB).
++ */
++export interface CombinationPool {
++  rows: Uint8Array;
++  count: number;
++}
++
++const POOL_MAX_ROWS = 8_145_060;   // C(45,6)
++
++/** (a, b) 를 고정하고 c<d<e<f 를 열거하여 필터 통과 조합을 rows 에 덧붙입니다. 반환: 새 행 수. */
++function appendPoolRange(rows: Uint8Array, n: number, a: number, b: number): number {
++  for (let c = b + 1; c <= 42; c++)
++    for (let d = c + 1; d <= 43; d++)
++      for (let e = d + 1; e <= 44; e++)
++        for (let f = e + 1; f <= 45; f++) {
++          if (!passesSixSorted(a, b, c, d, e, f)) continue;
++          const o = n * 6;
++          rows[o] = a; rows[o + 1] = b; rows[o + 2] = c; rows[o + 3] = d; rows[o + 4] = e; rows[o + 5] = f;
++          n++;
++        }
++  return n;
++}
++
++/** 동기 버전 (테스트·워커용). 메인 스레드 UI 에서는 buildFilteredPoolAsync 를 쓰세요. */
++export function buildFilteredPool(): CombinationPool {
++  const rows = new Uint8Array(POOL_MAX_ROWS * 6);
++  let n = 0;
++  for (let a = 1; a <= 40; a++)
++    for (let b = a + 1; b <= 41; b++) n = appendPoolRange(rows, n, a, b);
++  return { rows: rows.subarray(0, n * 6), count: n };
++}
++
++/** 비동기 버전: (a,b) 단위로 작업하다 약 25ms 마다 이벤트 루프에 양보해 화면이 멈추지 않게 합니다. */
++export async function buildFilteredPoolAsync(onProgress?: (ratio: number) => void): Promise<CombinationPool> {
++  const rows = new Uint8Array(POOL_MAX_ROWS * 6);
++  let n = 0;
++  let last = Date.now();
++  for (let a = 1; a <= 40; a++) {
++    for (let b = a + 1; b <= 41; b++) {
++      n = appendPoolRange(rows, n, a, b);
++      if (Date.now() - last > 25) {
++        onProgress?.(a / 40);
++        await new Promise<void>(resolve => setTimeout(resolve, 0));
++        last = Date.now();
++      }
++    }
++  }
++  onProgress?.(1);
++  return { rows: rows.subarray(0, n * 6), count: n };
++}
++
++let poolScoreBuffer: Float64Array | null = null;
++const POOL_TOP_RATIO = 0.05;
++const POOL_HIST_BINS = 65536;
++
++export interface PoolTopInfo {
++  /** 점수 버퍼(모듈 공유, 다음 호출 때 덮어씀). 부적격 조합은 -Infinity */
++  scores: Float64Array;
++  eligible: number;          // 점수 계산 대상(고정 번호 포함 조건 충족) 조합 수
++  k: number;                 // 상위 풀 크기 = max(1, floor(eligible × 5%))
++  cutScore: number;          // 상위 풀의 마지막(k번째) 조합의 점수
++  cutIndex: number;          // 그 조합의 풀 내 인덱스 (동점이면 인덱스가 작은 쪽이 상위 — 기존 stable sort 와 동일)
++}
++
++/** 인덱스 i 가 상위 풀 소속인지 판정 (점수 내림차순, 동점은 인덱스 오름차순으로 k개). */
++export function isInPoolTop(info: PoolTopInfo, i: number): boolean {
++  const s = info.scores[i];
++  return s > info.cutScore || (s === info.cutScore && i <= info.cutIndex);
++}
++
++/**
++ * 풀 전체를 번호 가중치로 점수화하고 상위 5 % 경계를 정확히 구합니다.
++ * 기존(number[][] → filter → map → 전체 sort → slice) 과 같은 집합을 O(n) 으로 계산합니다:
++ *   score = w[a]+w[b]+…+w[f] (왼쪽부터 더함 → 기존 reduce 와 동일한 부동소수 결과),
++ *   히스토그램으로 경계 구간을 찾고 그 구간만 정렬.
++ */
++export function computePoolTop(pool: CombinationPool, weights: number[], fixedNumbers: number[] = []): PoolTopInfo | null {
++  const { rows, count } = pool;
++  if (count === 0) return null;
++  const W = new Float64Array(46);
++  for (let i = 1; i <= 45; i++) W[i] = weights[i - 1] ?? 0;
++
++  const fixedList = Array.from(new Set(fixedNumbers));
++  if (fixedList.some(n => !(n >= 1 && n <= 45))) return null;      // 기존: 포함 조합 없음 → 경로 B
++  const F = new Uint8Array(46);
++  fixedList.forEach(n => { F[n] = 1; });
++  const fixedCount = fixedList.length;
++
++  if (!poolScoreBuffer || poolScoreBuffer.length < count) poolScoreBuffer = new Float64Array(count);
++  const scores = poolScoreBuffer;
++
++  let eligible = 0, min = Infinity, max = -Infinity;
++  for (let i = 0, o = 0; i < count; i++, o += 6) {
++    const a = rows[o], b = rows[o + 1], c = rows[o + 2], d = rows[o + 3], e = rows[o + 4], f = rows[o + 5];
++    if (fixedCount > 0 && F[a] + F[b] + F[c] + F[d] + F[e] + F[f] !== fixedCount) { scores[i] = -Infinity; continue; }
++    const s = W[a] + W[b] + W[c] + W[d] + W[e] + W[f];
++    if (!Number.isFinite(s)) { scores[i] = -Infinity; continue; }
++    scores[i] = s;
++    eligible++;
++    if (s < min) min = s;
++    if (s > max) max = s;
++  }
++  if (eligible === 0) return null;
++
++  const k = Math.max(1, Math.floor(eligible * POOL_TOP_RATIO));
++  const width = max > min ? (max - min) / POOL_HIST_BINS : 1;
++  const binOf = (s: number) => Math.min(POOL_HIST_BINS - 1, Math.floor((s - min) / width));
++
++  const hist = new Int32Array(POOL_HIST_BINS);
++  for (let i = 0; i < count; i++) { const s = scores[i]; if (s !== -Infinity) hist[binOf(s)]++; }
++
++  let above = 0, tb = POOL_HIST_BINS - 1;
++  for (; tb >= 0; tb--) {
++    if (above + hist[tb] >= k) break;
++    above += hist[tb];
++  }
++  const need = k - above;                       // 경계 구간에서 상위로 뽑을 개수 (1 이상)
++  const cand = new Int32Array(hist[tb]);
++  let m = 0;
++  for (let i = 0; i < count; i++) { const s = scores[i]; if (s !== -Infinity && binOf(s) === tb) cand[m++] = i; }
++  cand.sort((x, y) => (scores[y] - scores[x]) || (x - y));
++  const cutIndex = cand[need - 1];
++  return { scores, eligible, k, cutScore: scores[cutIndex], cutIndex };
++}
++
++/**
++ * 풀의 상위 5 % 중 하나를 균등 무작위로 선택합니다 (기존 경로 A 와 같은 분포).
++ * @param rand 테스트용 난수 주입 (기본 Math.random)
++ */
++export function selectFromPool(
++  pool: CombinationPool, weights: number[], fixedNumbers: number[] = [], rand: () => number = Math.random
++): { combo: number[]; k: number; eligible: number } | null {
++  const info = computePoolTop(pool, weights, fixedNumbers);
++  if (!info) return null;
++  const target = Math.min(info.k - 1, Math.floor(rand() * info.k));
++  let seen = 0;
++  for (let i = 0; i < pool.count; i++) {
++    if (!isInPoolTop(info, i)) continue;
++    if (seen === target) {
++      const o = i * 6;
++      return { combo: Array.from(pool.rows.subarray(o, o + 6)), k: info.k, eligible: info.eligible };
++    }
++    seen++;
++  }
++  return null;
++}
++
++// ==========================================
+ // 10. BACKTESTING ENGINE (최근 1년 전략 비교)
+ // ==========================================
+ /**
+@@ -1999,7 +2231,7 @@
+ // ==========================================
+ export function generateQuantumFlux(
+   results: LottoResult[],
+-  githubCombinations: number[][] = [],
++  githubCombinations: number[][] | CombinationPool = [],   // 필터 통과 풀(권장) 또는 기존 number[][] 목록(하위 호환)
+   opts?: OptimizedWeights,
+   fixedNumbers: number[] = []   // 반드시 포함할 번호 (최대 5개)
+ ): PredictionResult {
+@@ -2057,10 +2289,22 @@
+   ];
+   const optimizedTag = opts ? ['[최적화 가중치 적용]'] : [];
+ 
+-  // 경로 A: GitHub 조합 가중 스코어링
+-  if (githubCombinations.length > 0) {
++  // 경로 A-1: 필터 통과 풀(로컬 전수 열거, 6,657,176개) 가중 스코어링
++  //   풀은 필터를 이미 통과한 조합만 담고 있으므로 재필터가 필요 없고, 상위 5 % 경계는 O(n) 으로 계산합니다.
++  const legacyList: number[][] = Array.isArray(githubCombinations) ? githubCombinations : [];
++  if (!Array.isArray(githubCombinations) && githubCombinations.count > 0) {
++    const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts, technicalScores);
++    const picked = selectFromPool(githubCombinations, weights, fixedNumbers);
++    if (picked) {
++      const reason = buildSelectionReason(picked.combo, pareto, goldenCandidates, whitson);
++      return buildPredictionResult(picked.combo, 96, ['필터 통과 조합 풀 가중 스코어링', ...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS], reason);
++    }
++  }
++
++  // 경로 A-2: (하위 호환) number[][] 조합 목록 가중 스코어링
++  if (legacyList.length > 0) {
+     const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts, technicalScores);
+-    const scored = githubCombinations
++    const scored = legacyList
+       .filter(combo => {
+         // 고정 번호가 있을 경우 해당 번호를 모두 포함하는 조합만 허용
+         if (fixedNumbers.length > 0 && !fixedNumbers.every(n => combo.includes(n))) return false;

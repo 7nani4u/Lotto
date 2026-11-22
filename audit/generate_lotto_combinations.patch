@@ -1,0 +1,180 @@
+--- audit/baseline_generate_lotto_combinations.py	2026-11-21 21:24:17.065578000 +0900
++++ generate_lotto_combinations.py	2026-11-21 21:34:55.762756900 +0900
+@@ -25,21 +25,29 @@
+   3. 번대별: 각 십의 자리 구간(1~10, 11~20, …, 41~45) 당 ≤ 3개
+   4. 연속번호: 2연속 쌍 ≤ 2개, 3연속 이상 없음
+   5. AC    : 5 ≤ AC값 ≤ 10  (산술 복잡도)
+-  6. Sum46 : 합이 46이 되는 쌍 ≤ 2개 — 핫패스에서 제외 (아래 [최적화 근거] 참조)
++  6. Sum46 : 합이 46이 되는 쌍 ≤ 2개 — AC에 100% 포함되어 핫패스에서 제외 (아래 참조)
+ 
+-[최적화 근거 — 전수 실측 (C(45,6)=8,145,060 전부 평가, 임계값 변경 없음)]
+-  · 최종 통과 6,657,176개 (81.73%) — 구 순서·신 순서 불일치 0개로 동등성 검증됨
+-  · Sum46 제거 1,540개 = C(22,3) 정확히 일치. 상보쌍 (a,46-a) 22개 중 3쌍을
+-    고른 조합이 곧 Sum46 탈락 집합 전체이며, 이 1,540개의 AC값은 전부 0~4
+-    (분포 {0:4, 1:10, 2:197, 3:122, 4:1207}) → Sum46 탈락 ⊆ AC 탈락.
+-    즉 Sum46은 AC가 이미 100% 포함하므로 핫패스에서 호출하지 않음.
+-    (함수 is_valid_sum46 자체는 인터페이스 호환을 위해 유지)
+-  · AC 상한(≤10)은 구조적으로 항상 참: 15개 쌍의 서로 다른 차이값은 최대
+-    15개 → AC = distinct-5 ≤ 10. 하한(≥5)만 실질 필터로 동작.
+-  · 필터 단가 실측 (20만 조합 환산→8.1M 추정): 총합 0.8s · 비율 0.7s ·
+-    번대별 3.7s · 연속 2.3s · AC 11.8s · Sum46 8.8s.
+-    → 값싼 고제거율 필터를 앞에, 비싼 AC를 마지막에 배치 (AND이므로 결과 동일).
+-  · 100만 조합 벤치마크: 구 순서 3.07s → 신 순서 1.99s (약 35% 단축, 동일 통과수)
++[전수 감사 결과 — C(45,6)=8,145,060 전부 평가, 임계값 변경 없음]
++  재현: python audit/lotto_filter_audit.py   (numba 권장, 약 30초)
++  · 최종 통과 6,657,176개 (81.73%) · 제거 1,487,884개 (18.27%).
++    HEAD 원본 순서·감사 전 순서·현행 순서가 8,145,060개 전수에서 판정 불일치 0개.
++  · Sum46 ⊆ AC (중복 필터): Sum46 탈락 1,540개 = C(22,3). 합 46 쌍이 3개면 6개 수가
++    {a,46-a,b,46-b,c,46-c} 꼴이라 x→46-x 거울대칭으로 15개 차이값이 최대 9종
++    → AC ≤ 4 < 5. 실측 AC 분포 {0:4, 1:10, 2:197, 3:122, 4:1207}. 고유 제거량 0.
++  · AC 상한(≤10)은 구조적으로 항상 참(차이값 최대 15종 → AC ≤ 10). 하한(≥5)만 실질 필터.
++  · 고유(독점) 제거량 = 해당 필터를 삭제하면 복원되는 조합 수:
++    총합 416,416 · 번대별 268,690 · 연속 248,137 · 비율 94,367 · AC 86,890 · Sum46 0.
++    → 약한 부속 조건: 비율 하한(<1.3) 고유 1,061 · 연속 "쌍>2" 고유 5,060 (삭제 대상은 아님:
++       제거 효과가 작은 대신 단가도 거의 0 이고, 삭제하면 후보가 늘어 5순위 목표에 역행).
++  · 실행 순서: 5개 필터 120개 순열의 기대 비용(정확한 생존 수 × 실측 단가)이 약 2.2~2.6 µs/조합
++    (측정 2회: 최적 2.227·2.278 / 현행 2.238·2.289 / 최악 2.543·2.599).
++    현행 순서는 최적 대비 +0.5% → 순서 재배치로 얻을 이득 없음.
++  · 속도(이 PC, Python 3.14, 순수 파이썬): 필터 5개를 1회 언패킹으로 인라인 + 비율 정수 교차곱 +
++    번대 (i, i+3) 비교 + AC 차이값 집합 리터럴.
++    무작위 30만 조합: HEAD 3.60µs → 감사 전 2.39µs → 수정 후 0.81µs.
++    전체 생성(8,145,060 평가·6,657,176행 기록): 감사 전 34.0s → 수정 후 9.0s,
++    출력 파일 SHA-256 동일(바이트 단위 일치).
++  · 저장 크기 주의: 6,657,176행 × 18B = 119,829,168B (114.3 MiB) — GitHub 일반 푸시 한도(100 MiB) 초과.
+ 
+ [출력 형식]  01 04 06 11 24 41
+ ════════════════════════════════════════════════════════════════════════════════
+@@ -52,6 +60,7 @@
+ import sys
+ import time
+ from datetime import datetime, timedelta, timezone
++from fractions import Fraction
+ 
+ # Windows 콘솔 한글 출력 호환
+ if hasattr(sys.stdout, "reconfigure"):
+@@ -334,32 +343,79 @@
+     return pairs <= 2
+ 
+ 
+-def passes_all_filters(combo: tuple[int, ...]) -> bool:
+-    """
+-    5개 유효 필터를 모두 통과하는지 검사합니다 (Sum46은 핫패스 제외, §3 참조).
++# 비율 필터의 정수 교차곱 상수 — RATIO_MIN/RATIO_MAX 에서 자동 유도 (수동 동기화 불필요).
++#   hi/lo ≥ 13/10  ⇔  hi·10 ≥ lo·13      (부동소수 나눗셈 제거, 판정은 float 비교와 동일:
++#   hi,lo 는 255 이하 정수라 서로 다른 유리수의 간격이 8e-4 이상이므로 반올림 오차가 개입할 수 없음)
++_RMIN_N, _RMIN_D = Fraction(str(RATIO_MIN)).as_integer_ratio()
++_RMAX_N, _RMAX_D = Fraction(str(RATIO_MAX)).as_integer_ratio()
++_AC_DIST_MIN = AC_MIN + 5     # AC = (서로 다른 차이값 수) − 5
++_AC_DIST_MAX = AC_MAX + 5
+ 
+-    [성능 최적화 순서 — AND이므로 판정 결과는 순서와 무관]
+-    총합(값쌈·제거율 7.96%) → 비율(값쌈) → 번대별 → 연속 → AC(비쌈·제거율 1.7%)
+-    실측 단가(8.1M 환산): 총합 0.8s · 비율 0.7s · 번대별 3.7s ·
+-    연속 2.3s · AC 11.8s · Sum46(제외) 8.8s.
+-    비싼 AC를 마지막에 두어 탈락 조합에 대한 불필요한 AC 계산을 줄입니다.
+-    각 필터는 실패 즉시 반환(단락 평가)하여 불필요한 계산을 줄입니다.
+ 
+-    [동등성] 구 순서(총합→AC→Sum46→비율→번대별→연속)와 8,145,060개 전수 비교
+-    불일치 0개, 통과수 6,657,176개 동일.
++def passes_all_filters(combo: tuple[int, ...]) -> bool:
+     """
+-    total = combo[0] + combo[1] + combo[2] + combo[3] + combo[4] + combo[5]
+-    if not (SUM_MIN <= total <= SUM_MAX):
+-        return False
+-    if not is_valid_ratio(combo):
+-        return False
+-    if not is_valid_range_pattern(combo):
++    5개 유효 필터를 모두 통과하는지 검사합니다 (Sum46은 AC에 포함되어 제외, §3 참조).
++
++    [구조] 정렬된 6-튜플을 한 번만 언패킹하고 필터 5개를 이 함수 안에 인라인했습니다.
++    is_valid_* 함수들은 "사람이 읽는 명세(reference)"로 그대로 두었고, 이 함수와
++    passes_all_filters_legacy(= is_valid_* 합성, HEAD 원본 순서)가 8,145,060개 전수에서
++    일치함을 `--verify` 로 확인합니다. 임계값 상수를 바꾸면 반드시 `--verify` 를 다시 돌리십시오.
++
++    [인라인 근거 — 모두 정렬(오름차순)·서로 다른 수·1~45 범위 전제]
++      · 총합   : 그대로.
++      · 비율   : hi=상위3합, lo=하위3합. 1.3 ≤ hi/lo ≤ 7.5 를 정수 교차곱으로 판정.
++      · 번대별 : 같은 번대에 4개 이상 ⇔ 정렬 상 (a,d)·(b,e)·(c,f) 중 한 쌍이 같은 번대.
++                 번대 = (n-1)//10 은 n≤45 에서 최대 4 이므로 min(·,4) 불필요.
++      · 연속   : 인접 차 1 인 쌍 수 ≤ 2, 3연속(x, x+1, x+2) 없음. (명세와 동일 로직)
++      · AC     : 15개 차이값 집합 리터럴의 크기 ≥ AC_MIN+5. (상한 AC_MAX 는 구조적으로
++                 항상 참이지만 임계값 변경에 대비해 비교식은 유지)
++
++    [순서] 판정은 AND 이므로 순서와 무관합니다. 현행 순서(총합→비율→번대별→연속→AC)는
++    전수 생존 수 × 실측 단가로 계산한 120개 순열 중 최적 대비 +0.5% 이내입니다.
++    (audit/lotto_filter_audit.py [8] 참조)
++    """
++    a, b, c, d, e, f = combo
++    total = a + b + c + d + e + f
++    if total < SUM_MIN or total > SUM_MAX:
++        return False
++
++    lo = a + b + c
++    hi = total - lo
++    if hi * _RMIN_D < lo * _RMIN_N or hi * _RMAX_D > lo * _RMAX_N:
+         return False
+-    if not is_valid_consecutive(combo):
++
++    if ((a - 1) // 10 == (d - 1) // 10 or (b - 1) // 10 == (e - 1) // 10
++            or (c - 1) // 10 == (f - 1) // 10):
+         return False
+-    if not is_valid_ac(combo):
++
++    pairs = 0
++    if b == a + 1:
++        pairs += 1
++        if c == a + 2:
++            return False
++    if c == b + 1:
++        pairs += 1
++        if d == b + 2:
++            return False
++    if d == c + 1:
++        pairs += 1
++        if e == c + 2:
++            return False
++    if e == d + 1:
++        pairs += 1
++        if f == d + 2:
++            return False
++    if f == e + 1:
++        pairs += 1
++    if pairs > 2:
+         return False
+-    return True
++
++    n_diff = len({b - a, c - a, d - a, e - a, f - a,
++                  c - b, d - b, e - b, f - b,
++                  d - c, e - c, f - c,
++                  e - d, f - d,
++                  f - e})
++    return _AC_DIST_MIN <= n_diff <= _AC_DIST_MAX
+ 
+ 
+ def passes_all_filters_legacy(combo: tuple[int, ...]) -> bool:
+@@ -413,6 +469,7 @@
+     processed = 0
+     saved     = 0
+     batch: list[str] = []
++    pad2 = [f"{n:02d}" for n in range(46)]     # 2자리 제로패딩 조회표 (포맷 호출 제거)
+ 
+     try:
+         with open(output_path, "w", newline="\n", encoding="utf-8") as fout:
+@@ -420,7 +477,8 @@
+                 processed += 1
+ 
+                 if passes_all_filters(combo):
+-                    batch.append(" ".join(f"{n:02d}" for n in combo))
++                    a, b, c, d, e, f = combo
++                    batch.append(f"{pad2[a]} {pad2[b]} {pad2[c]} {pad2[d]} {pad2[e]} {pad2[f]}")
+                     saved += 1
+ 
+                     # 배치 쓰기: 메모리 대신 WRITE_BATCH 단위로 I/O
+@@ -555,6 +613,7 @@
+     print(f"    신·구 판정 일치: {both_new_old:,}/{sample_size:,} "
+           f"({both_new_old/sample_size*100:.2f}%)")
+     print("  ※ [S]는 추정치입니다. 확정값은 [M]을 사용하십시오.")
++    print("  ※ [M]은 audit/lotto_filter_audit.py 전수 감사로 재현·검증된 값입니다.")
+     print("=" * 72)
+ 
+ 

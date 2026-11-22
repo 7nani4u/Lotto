@@ -50,6 +50,14 @@
 .glow-blue { text-shadow: 0 0 20px rgba(59, 130, 246, 0.5), 0 0 40px rgba(59, 130, 246, 0.2); }
 .glow-amber { text-shadow: 0 0 20px rgba(245, 158, 11, 0.5), 0 0 40px rgba(245, 158, 11, 0.2); }
 
+/* 한글 문장은 단어(어절) 단위로만 줄바꿈 — "불/가"처럼 단어 중간에서 끊기지 않게.
+   너무 긴 토큰(번호 나열 등)만 overflow-wrap 으로 강제 줄바꿈해 가로 넘침을 막는다. */
+.ko-flow {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  line-break: strict;
+}
+
 .custom-scrollbar::-webkit-scrollbar { width: 5px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { @apply bg-slate-800 rounded-full hover:bg-slate-700 transition-colors; }

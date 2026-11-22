@@ -5,7 +5,7 @@ import {
   calculateBallColor,
   fetchLottoData,
   generateQuantumFlux,
-  fetchGithubCombinations,
+  buildFilteredPoolAsync,
   backtestStrategies,
   optimizeQuantumParameters,
   buildFullAnalysisTable,
@@ -24,36 +24,18 @@ import {
   OptimizedWeights,
   FullIndicatorAnalysis,
   FusedRow,
+  CombinationPool,
 } from './services/lottoService';
 import { LottoResult, PredictionResult } from './types';
+import { Ball } from './components/Ball';
+import { TopPicksPanel } from './components/TopPicksPanel';
+import { FlowPanel } from './components/FlowPanel';
+import { RecentDrawStrip, RecentDrawsSummary } from './components/RecentDrawStrip';
+import { summarizeDraw } from './services/drawMeta';
+import { buildEvidenceReport, EvidenceReport } from './services/evidence';
 
 const GENERATED_HISTORY_KEY = 'lottoQuantumGeneratedHistoryV1';
 const MAX_FIXED_NUMBERS = 5;
-
-const Ball: React.FC<{ num: number; isBonus?: boolean; onClick?: () => void; small?: boolean; responsive?: boolean }> = ({
-  num,
-  isBonus,
-  onClick,
-  small,
-  responsive,
-}) => {
-  let sizeClass = small ? 'w-8 h-8 text-xs sm:text-sm' : 'w-9 h-9 sm:w-10 sm:h-10 md:w-12 md:h-12 text-[15px] sm:text-lg md:text-xl flex-shrink-0';
-  let borderClass = isBonus ? 'border-[3px] border-dashed border-gray-300 ' : '';
-
-  if (responsive) {
-    sizeClass = 'w-[26px] h-[26px] sm:w-8 sm:h-8 md:w-12 md:h-12 text-[11px] sm:text-sm md:text-xl flex-shrink-0';
-    borderClass = isBonus ? 'border-2 sm:border-[3px] border-dashed border-gray-300 ' : '';
-  }
-
-  return (
-    <div
-      onClick={onClick}
-      className={`${sizeClass} rounded-full flex items-center justify-center font-bold shadow-lg ${borderClass}${onClick ? 'cursor-pointer hover:scale-110 transition-transform ' : ''}${calculateBallColor(num)}`}
-    >
-      {num}
-    </div>
-  );
-};
 
 const App: React.FC = () => {
   const [allData, setAllData] = useState<LottoResult[]>([]);
@@ -65,7 +47,8 @@ const App: React.FC = () => {
   const [combinationCount, setCombinationCount] = useState(5);
   const [selectedAnalysisNum, setSelectedAnalysisNum] = useState<number | null>(null);
   const [repeatAnalysis, setRepeatAnalysis] = useState<RepeatAnalysis | null>(null);
-  const [githubCombinations, setGithubCombinations] = useState<number[][]>([]);
+  // 필터 통과 조합 풀 (로컬 전수 열거). 준비되기 전에는 null → 경로 B(직접 생성)로 동작
+  const [combinationPool, setCombinationPool] = useState<CombinationPool | null>(null);
   const [strategyAnalysis, setStrategyAnalysis] = useState<StrategyAnalysis | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [quantumOptResult, setQuantumOptResult] = useState<QuantumOptimizationResult | null>(null);
@@ -83,7 +66,8 @@ const App: React.FC = () => {
   const [fixedNumbers, setFixedNumbers] = useState<number[]>([]);
   const [fixedInput, setFixedInput] = useState('');
   const [indicatorTable, setIndicatorTable] = useState<FullIndicatorAnalysis[]>([]);
-  const [showFullTable, setShowFullTable] = useState(false);
+  const [evidence, setEvidence] = useState<EvidenceReport | null>(null);
+  const [evidenceProgress, setEvidenceProgress] = useState(0);
 
   useEffect(() => {
     try {
@@ -103,8 +87,10 @@ const App: React.FC = () => {
       setLoading(true);
       setProgress(0);
 
-      // GitHub 로또 조합 데이터 비동기 로드
-      fetchGithubCombinations().then(data => setGithubCombinations(data));
+      // 필터 통과 조합 풀을 로컬에서 비동기 생성 (네트워크 파일 불필요, 약 1초, UI 양보하며 진행)
+      buildFilteredPoolAsync()
+        .then(pool => setCombinationPool(pool))
+        .catch(error => console.error('조합 풀 생성 오류:', error));
 
       const data = await fetchLottoData((nextProgress, round) => {
         setProgress(nextProgress);
@@ -239,23 +225,16 @@ const App: React.FC = () => {
       };
     });
 
-    // 장기 대기 번호 (10회차 이상 미출현, 초과율 내림차순)
-    const longAbsent = Array.from({ length: 45 }, (_, i) => i + 1)
-      .filter(n => gapInfo[n].curGap >= 10)
-      .sort((a, b) => gapInfo[b].overdueRatio - gapInfo[a].overdueRatio)
-      .slice(0, 10)
-      .map(n => ({ number: n, curGap: gapInfo[n].curGap, overdueRatio: gapInfo[n].overdueRatio, avgGap: gapInfo[n].avgGap }));
-
     // 최근 복귀 번호 (최근 3회 내 출현 + 그 이전 5회 이상 공백 — Python과 동일 정의)
     const recentlyBack = classifyRecentlyBack(allData);
 
-    return { trends, gapInfo, segmentFlow, longAbsent, recentlyBack, connectionScores, flowScores };
+    return { trends, gapInfo, segmentFlow, recentlyBack, connectionScores, flowScores };
   }, [flowSignals, allData]);
 
   // ── 융합 랭킹 + 안정도 (🏆/📋/🔗 표식의 단일 근거)
   // fused = (1−w)×종합 + w×흐름, w=0.25. 안정도 = 80% 서브샘플 융합 상위 진입율.
   const stabilityMap = useMemo(
-    () => computeStability(allData, 10, FLOW_WEIGHT_DEFAULT),
+    () => computeStability(allData, 40, FLOW_WEIGHT_DEFAULT),
     [allData],
   );
   const fusedTable: FusedRow[] = useMemo(
@@ -263,6 +242,39 @@ const App: React.FC = () => {
       ? buildFusedTable(indicatorTable, flowSignals, FLOW_WEIGHT_DEFAULT, stabilityMap)
       : []),
     [indicatorTable, flowSignals, stabilityMap],
+  );
+
+  // ── 세컨드 오피니언: 독립 스택 Top6 (렌더마다 재계산하지 않도록 메모)
+  const secondOpinion = useMemo(
+    () => (indicatorTable.length > 0 ? secondOpinion645(allData, indicatorTable, flowSignals, FLOW_WEIGHT_DEFAULT) : null),
+    [allData, indicatorTable, flowSignals],
+  );
+
+  // ── 워크포워드 검증(백테스트): 화면 점수가 과거에 무작위보다 나았는지 — 비동기·UI 양보
+  useEffect(() => {
+    if (allData.length < 360) return;
+    let cancelled = false;
+    setEvidence(null);
+    setEvidenceProgress(0);
+    buildEvidenceReport(allData, {
+      testRounds: 400,
+      minTrain: 300,
+      isCancelled: () => cancelled,
+      onProgress: ratio => { if (!cancelled) setEvidenceProgress(ratio); },
+    })
+      .then(report => { if (!cancelled) setEvidence(report); })
+      .catch(error => console.error('검증 계산 오류:', error));
+    return () => { cancelled = true; };
+  }, [allData]);
+
+  // ── 최근 10회 구조 요약 (합·홀짝·연번·AC·필터·이월) + 회고 적중
+  const drawMetas = useMemo(
+    () => allData.slice(0, 10).map((draw, i) => summarizeDraw(draw, allData[i + 1])),
+    [allData],
+  );
+  const retroByRound = useMemo(
+    () => new Map((evidence?.recent ?? []).map(r => [r.round, r] as const)),
+    [evidence],
   );
 
   // ── 장기 대기 심층 (⏳ 섹션 근거: 미출 기간·평균·조건부 재출현율)
@@ -283,7 +295,7 @@ const App: React.FC = () => {
     });
 
     const nextPredictions = generateUniquePredictionSet(
-      () => generateQuantumFlux(allData, githubCombinations, mergedWeights, fixedNumbers),
+      () => generateQuantumFlux(allData, combinationPool ?? [], mergedWeights, fixedNumbers),
       combinationCount
     );
 
@@ -745,480 +757,35 @@ const App: React.FC = () => {
 
         {/* 내부 분석/최적화는 자동 실행되며 화면에는 표시하지 않음 */}
 
-        {/* ══ [1] 출현가능성 상위 6개 번호 + 전체 테이블 ══ */}
-        {indicatorTable.length > 0 && (() => {
-          // 선정 기준 = 융합 순위 (종합 75% + 흐름 25%). 표·카드·근거가 같은 순서를 공유.
-          const fused = fusedTable.length > 0
-            ? fusedTable
-            : [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore)
-                .map((t, i) => ({
-                  number: t.number, compositeScore: t.compositeScore, ensRank: t.rank,
-                  fusedScore: t.compositeScore, fusedRank: i + 1, agreement5: 0,
-                  stability: null as number | null, tier: 'mid' as const, contested: false,
-                }));
-          const top6 = fused.slice(0, 6);
-          const byNum = new Map<number, FullIndicatorAnalysis>(
-            indicatorTable.map(t => [t.number, t] as [number, FullIndicatorAnalysis]),
-          );
-          const cutoffGap = fused.length >= 7
-            ? +(fused[5].fusedScore - fused[6].fusedScore).toFixed(3)
-            : NaN;
-          const TIER_BADGE: Record<string, { label: string; cls: string }> = {
-            pick:  { label: '▶ 확정', cls: 'text-emerald-300 bg-emerald-900/50 border border-emerald-700/60' },
-            next:  { label: '◆ 차순', cls: 'text-yellow-300 bg-yellow-900/40 border border-yellow-700/60' },
-            avoid: { label: '✕ 회피', cls: 'text-blue-400 bg-blue-900/30 border border-blue-800/50' },
-            mid:   { label: '· 중립', cls: 'text-gray-500 bg-gray-800/40 border border-gray-700/50' },
-          };
-          // 패턴: 공인 가중 총평 signalScore(MA 20% + RSI 30% + BB 35% + Aroon 15%) 단일 기준.
-          // 기존에는 MA+RSI 원시값 독자 임계값(65/35 등)만 사용해 서비스 공인
-          // 판정과 어긋났음. 방향 정의는 기존과 동일(상승=과열 활성,
-          // 하락=냉각 후 회귀 기대). 분포 검증: 합성 957회차에서
-          // 상승 3 · 하락 20 · 유지 5 · 변동 17로 변별력 확보.
-          const getPatObj = (item: FullIndicatorAnalysis) => {
-            const v = item.signalScore;
-            if (v <= -0.5) return { label: '상승', cls: 'text-red-400 bg-red-900/40 border border-red-800/60' };
-            if (v >= 0.5)  return { label: '하락', cls: 'text-blue-400 bg-blue-900/40 border border-blue-800/60' };
-            if (Math.abs(v) <= 0.15) return { label: '유지', cls: 'text-gray-400 bg-gray-700/40 border border-gray-600/50' };
-            return { label: '변동', cls: 'text-yellow-400 bg-yellow-900/30 border border-yellow-800/60' };
-          };
-          // 특징: 공인 이산 신호 + Z-Score + 가중 총평을 순서 고정으로 열거.
-          // 기존에는 MA 누락·Aroon ±60(공인 ±30과 불일치) 문제가 있었음.
-          const getFeat = (item: FullIndicatorAnalysis) => {
-            const f: string[] = [];
-            if (item.signalScore >= 0.5)       f.push('회귀 우세');
-            else if (item.signalScore <= -0.5) f.push('과열 우세');
-            if (item.zScore < -1.0)            f.push('장기 저출현');
-            else if (item.zScore > 1.0)         f.push('장기 과출현');
-            if (item.rsiScore > 0)             f.push('RSI 과소');
-            else if (item.rsiScore < 0)         f.push('RSI 과다');
-            if (item.bbScore > 0)              f.push('BB 하단');
-            else if (item.bbScore < 0)          f.push('BB 상단');
-            if (item.aroonScore > 0)           f.push('장기 공백');
-            else if (item.aroonScore < 0)       f.push('단기 활성');
-            if (item.maScore > 0)              f.push('MA 냉각');
-            else if (item.maScore < 0)          f.push('MA 과열');
-            return f.length > 0 ? f.join(' · ') : '평균 범위 내';
-          };
-          return (
-            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-teal-900/40 mt-8">
-              <h2 className="text-lg font-bold text-teal-300 border-b border-gray-700/60 pb-3 mb-5 flex items-center gap-2">
-                <span>🏆</span> 출현가능성 상위 6개 번호
-                <span className="text-xs font-normal text-gray-500 ml-1">융합 순위 (종합 75% + 흐름 25%)</span>
-              </h2>
-
-              {/* Top 6 카드 — 융합 선정 + 티어 표식 */}
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-6">
-                {top6.map((row, idx) => {
-                  const item = byNum.get(row.number);
-                  if (!item) return null;
-                  const tier = TIER_BADGE[row.tier];
-                  const trend = flowAnalysis?.trends[row.number] ?? '안정';
-                  const gap = flowAnalysis?.gapInfo[row.number];
-                  const signals: string[] = [];
-                  if (item.zScore < -0.5)    signals.push('저출현 회귀');
-                  if (item.rsiScore > 0)     signals.push('RSI 과소');
-                  if (item.bbScore > 0)      signals.push('BB 하단');
-                  if (item.aroonScore > 0)   signals.push('장기 공백');
-                  if (item.maScore > 0)      signals.push('MA 냉각');
-                  const borderCls = row.tier === 'pick'
-                    ? 'border-emerald-700/60 bg-emerald-950/40'
-                    : row.tier === 'next'
-                      ? 'border-yellow-700/60 bg-yellow-950/30'
-                      : 'border-gray-700 bg-gray-900/50';
-                  const scoreCls = row.fusedScore >= 65 ? 'text-emerald-400' : row.fusedScore >= 50 ? 'text-yellow-400' : 'text-gray-300';
-                  return (
-                    <div key={row.number}
-                         className={`flex flex-col items-center gap-1.5 rounded-xl border p-3 cursor-pointer hover:scale-105 transition-transform ${borderCls}`}
-                         onClick={() => handleBallClick(row.number)}
-                         title={`융합 ${row.fusedRank}위 · 종합 ${row.ensRank}위 · 합의 ${row.agreement5}/5${row.contested ? ' · 의견 분열' : ''}`}>
-                      <div className="flex items-center gap-1">
-                        <div className="text-[10px] text-gray-500 font-bold">#{idx + 1}</div>
-                        <span className={`text-[9px] font-bold px-1 py-0.5 rounded whitespace-nowrap ${tier.cls}`}>{tier.label}</span>
-                        {row.contested && (
-                          <span className="text-[9px] font-bold px-1 py-0.5 rounded whitespace-nowrap text-red-300 bg-red-900/50 border border-red-700/60">※</span>
-                        )}
-                      </div>
-                      <Ball num={row.number} small />
-                      <div className={`text-sm font-black ${scoreCls}`}>{row.fusedScore.toFixed(1)}점</div>
-                      <div className="text-[9px] text-gray-500">종합 {row.compositeScore.toFixed(1)} · {trend}{gap ? ` · ${gap.curGap}회 대기` : ''}</div>
-                      <div className="text-[9px] text-gray-500">
-                        합의 {row.agreement5}/5 · 안정 {row.stability === null ? '─' : `${Math.round(row.stability * 100)}%`}
-                      </div>
-                      {/* 5종 지표 서브점수 미니바 */}
-                      <div className="w-full space-y-[3px] mt-1.5">
-                        {([
-                          ['Z', item.zSubScore],
-                          ['BB', item.bbSubScore],
-                          ['RSI', item.rsiSubScore],
-                          ['MA', item.maSubScore],
-                          ['Ar', item.aroonSubScore],
-                        ] as [string, number][]).map(([lbl, val]) => (
-                          <div key={lbl} className="flex items-center gap-1">
-                            <span className="text-[7px] text-gray-600 w-4 text-right flex-shrink-0 font-bold">{lbl}</span>
-                            <div className="flex-1 h-1 bg-gray-700 rounded-full overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${val >= 65 ? 'bg-emerald-500' : val >= 50 ? 'bg-yellow-500' : 'bg-gray-600'}`}
-                                style={{ width: `${val}%` }}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="flex flex-col items-center gap-0.5 w-full mt-1">
-                        {signals.slice(0, 2).map(s => (
-                          <span key={s} className="text-[9px] px-1 py-0.5 rounded bg-teal-900/50 text-teal-300 border border-teal-800/60 text-center w-full truncate">{s}</span>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* 세컨드 오피니언 — 5엔진 통합 스택 Top6와 융합 Top6의 일치도 */}
-              {(() => {
-                const so = secondOpinion645(allData, indicatorTable, flowSignals, FLOW_WEIGHT_DEFAULT);
-                if (!so) return null;
-                return (
-                  <div className="mb-6 rounded-xl border border-indigo-800/50 bg-indigo-950/30 p-3">
-                    <div className="text-[11px] font-bold text-indigo-300 mb-2 flex items-center gap-1.5">
-                      <span>🔀</span> 세컨드 오피니언 — 독립 스택 Top6 · 융합 Top6와 {so.overlap}개 일치
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {so.numbers.map(n => (
-                        <span key={n}
-                              onClick={() => handleBallClick(n)}
-                              className="cursor-pointer hover:scale-110 transition-transform inline-block"
-                              title={so.shared.includes(n) ? '융합 Top6와 공통' : '통합 스택 고유'}>
-                          <Ball num={n} small />
-                        </span>
-                      ))}
-                      <span className="text-[10px] text-gray-500 ml-1">
-                        공통: {so.shared.length > 0 ? so.shared.join(', ') : '없음'} · 고유: {so.uniqueToUnified.length > 0 ? so.uniqueToUnified.join(', ') : '없음'}
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-gray-600 mt-1.5">스택 간 다변화 신호이며 적중률 우위를 의미하지 않습니다.</div>
-                  </div>
-                );
-              })()}
-
-              {/* 전체 테이블 토글 */}
-              <div className="border border-gray-700 rounded-xl overflow-hidden">
-                <button
-                  onClick={() => setShowFullTable(v => !v)}
-                  className="w-full flex items-center justify-between px-3 sm:px-4 py-3 bg-gray-900 hover:bg-gray-700/50 transition-colors gap-2"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 text-left">
-                    <span className="text-sm font-bold text-gray-300 flex items-center gap-1.5 whitespace-nowrap">
-                      <span>📋</span> 전체 데이터 테이블
-                    </span>
-                    <span className="text-[10px] sm:text-xs text-gray-500 font-normal break-keep">
-                      — 1~45번 출현가능성 점수 전체 (융합 순위순 = 실제 선정 순서)
-                    </span>
-                  </div>
-                  <span className="text-xs text-gray-500 font-bold flex-shrink-0 whitespace-nowrap">{showFullTable ? '▲ 접기' : '▼ 펼치기'}</span>
-                </button>
-                {!Number.isNaN(cutoffGap) && cutoffGap < 0.5 && (
-                  <div className="px-3 sm:px-4 py-2 bg-yellow-950/40 border-t border-yellow-800/40 text-[11px] text-yellow-300">
-                    ⚠️ 6위–7위 격차 {cutoffGap.toFixed(3)}점 — 사실상 동점이라 7~8위가 언제든 뒤집힐 수 있습니다.
-                  </div>
-                )}
-                {showFullTable && (
-                  <div className="overflow-x-auto border-t border-gray-700 custom-scrollbar">
-                    <table className="w-full text-xs min-w-[680px]">
-                      <thead>
-                        <tr className="bg-gray-900 border-b border-gray-700">
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap" title="융합 순위 (실제 선정 순서)">순위</th>
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">번호</th>
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">티어</th>
-                          <th className="py-2 px-3 text-teal-400 font-bold text-center whitespace-nowrap">융합 <span className="text-gray-600 font-normal text-[10px]">점수(0~100)</span></th>
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap" title="순수 앙상블 종합 점수">종합</th>
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap" title="5종 서브점수 중 65점 이상 개수">합의</th>
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap" title="80% 서브샘플 융합 상위 진입율">안정</th>
-                          <th className="py-2 px-2 text-gray-500 font-bold text-center whitespace-nowrap">패턴</th>
-                          <th className="py-2 px-3 text-gray-500 font-bold text-left whitespace-nowrap">특징 요약</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {fused.map(row => {
-                          const item = byNum.get(row.number);
-                          if (!item) return null;
-                          const patObj = getPatObj(item);
-                          const feat = getFeat(item);
-                          const tier = TIER_BADGE[row.tier];
-                          const rowCls = row.tier === 'pick' ? 'bg-teal-950/20' : row.tier === 'next' ? 'bg-yellow-950/10' : '';
-                          const scoreCls = row.fusedScore >= 65 ? 'text-emerald-400'
-                            : row.fusedScore >= 50 ? 'text-yellow-400'
-                            : row.fusedScore >= 35 ? 'text-gray-300' : 'text-blue-400';
-                          const barCls = row.fusedScore >= 65 ? 'bg-emerald-500'
-                            : row.fusedScore >= 50 ? 'bg-yellow-500'
-                            : row.fusedScore >= 35 ? 'bg-gray-500' : 'bg-blue-500';
-                          return (
-                            <tr key={row.number}
-                                className={`border-b border-gray-800/60 hover:bg-gray-700/20 transition-colors ${rowCls}`}>
-                              <td className="py-1.5 px-2 text-center">
-                                <span className={`font-black ${row.fusedRank <= 3 ? 'text-yellow-400' : row.fusedRank <= 6 ? 'text-teal-400' : 'text-gray-600'}`}>
-                                  {row.fusedRank}
-                                </span>
-                                <div className="text-[9px] text-gray-600">종합 {row.ensRank}위</div>
-                              </td>
-                              <td className="py-1.5 px-2 text-center">
-                                <div className="flex justify-center cursor-pointer" onClick={() => handleBallClick(row.number)}>
-                                  <Ball num={row.number} small />
-                                </div>
-                              </td>
-                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
-                                <span className={`inline-block text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${tier.cls}`}>{tier.label}</span>
-                                {row.contested && (
-                                  <div className="text-[9px] font-bold text-red-300 mt-0.5" title="앙상블 순위와 10위 이상 엇갈림">※분열</div>
-                                )}
-                              </td>
-                              <td className="py-1.5 px-3 text-center whitespace-nowrap">
-                                <div className={`font-black text-sm ${scoreCls}`}>{row.fusedScore.toFixed(1)}</div>
-                                <div className="w-full h-1 bg-gray-700 rounded-full mt-0.5 overflow-hidden">
-                                  <div className={`h-full rounded-full ${barCls}`} style={{ width: `${Math.min(100, row.fusedScore)}%` }} />
-                                </div>
-                              </td>
-                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
-                                <span className="text-gray-400 text-[11px]">{row.compositeScore.toFixed(1)}</span>
-                              </td>
-                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
-                                <span className={`text-[11px] font-bold ${row.agreement5 >= 4 ? 'text-emerald-400' : row.agreement5 >= 3 ? 'text-yellow-400' : 'text-gray-500'}`}>
-                                  {row.agreement5}/5
-                                </span>
-                              </td>
-                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
-                                <span className="text-gray-400 text-[11px]">
-                                  {row.stability === null ? '─' : `${Math.round(row.stability * 100)}%`}
-                                </span>
-                              </td>
-                              <td className="py-1.5 px-2 text-center whitespace-nowrap">
-                                <span className={`inline-block text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${patObj.cls}`}>{patObj.label}</span>
-                              </td>
-                              <td className="py-1.5 px-3 whitespace-nowrap">
-                                <span className="text-gray-400 text-[11px]">{feat}</span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    <div className="px-3 sm:px-4 py-2 bg-gray-900 text-[10px] text-gray-500 border-t border-gray-700">
-                      ▶확정 1~6위(가져갈 번호) · ◆차순 7~12위(교체 후보) · ✕회피 40~45위 · ※분열 = 종합 순위와 10위 이상 엇갈림 · 합의 n/5 · 안정 = 재현율(선택의 재현성이지 적중률이 아님)
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })()}
+        {/* ══ [1] 출현가능성 상위 6개 번호 + 검증 배너 + 세컨드 오피니언 + 전체 테이블 ══ */}
+        {indicatorTable.length > 0 && fusedTable.length > 0 && (
+          <TopPicksPanel
+            fused={fusedTable}
+            table={indicatorTable}
+            trends={flowAnalysis?.trends ?? null}
+            gapInfo={flowAnalysis?.gapInfo ?? null}
+            secondOpinion={secondOpinion}
+            evidence={evidence}
+            evidenceProgress={evidenceProgress}
+            dataRounds={allData.length}
+            latestRound={allData[0]?.round ?? 0}
+            onBallClick={handleBallClick}
+          />
+        )}
 
         {/* ══ [1.5] 🔗 번호 흐름 분석 ══ */}
-        {flowAnalysis && indicatorTable.length > 0 && (() => {
-          // 융합 Top6의 흐름 근거 — 카드·표와 동일한 선정 순서 공유.
-          const fusedTop6 = fusedTable.length > 0
-            ? fusedTable.slice(0, 6)
-            : [...indicatorTable].sort((a, b) => b.compositeScore - a.compositeScore).slice(0, 6)
-                .map((t, i) => ({
-                  number: t.number, compositeScore: t.compositeScore, ensRank: t.rank,
-                  fusedScore: t.compositeScore, fusedRank: i + 1, agreement5: 0,
-                  stability: null as number | null, tier: 'mid' as const, contested: false,
-                }));
-          const { trends, gapInfo, segmentFlow, longAbsent, recentlyBack, connectionScores } = flowAnalysis;
-          const segOf = (n: number) => segmentFlow.find(s => n >= s.lo && n <= s.hi);
-
-          const trendStyle: Record<string, string> = {
-            '급락': 'text-blue-300 bg-blue-900/50 border border-blue-700/60',
-            '급등': 'text-red-300 bg-red-900/50 border border-red-700/60',
-            '상승': 'text-orange-300 bg-orange-900/40 border border-orange-700/60',
-            '하락': 'text-cyan-300 bg-cyan-900/40 border border-cyan-700/60',
-            '안정': 'text-gray-400 bg-gray-700/50 border border-gray-600/50',
-          };
-          const segStyle: Record<string, { bg: string; text: string; icon: string }> = {
-            '상승': { bg: 'border-orange-700/60 bg-orange-950/30', text: 'text-orange-300', icon: '↑' },
-            '하락': { bg: 'border-cyan-700/60 bg-cyan-950/30',    text: 'text-cyan-300',   icon: '↓' },
-            '안정': { bg: 'border-gray-700 bg-gray-900/60',        text: 'text-gray-400',   icon: '→' },
-          };
-          const trendGroups: Record<string, number[]> = { '급등': [], '상승': [], '안정': [], '하락': [], '급락': [] };
-          for (let n = 1; n <= 45; n++) trendGroups[trends[n]]?.push(n);
-
-          return (
-            <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-indigo-900/40 mt-8">
-              <h2 className="text-lg font-bold text-indigo-300 border-b border-gray-700/60 pb-3 mb-6 flex items-center gap-2">
-                <span>🔗</span> 번호 흐름 분석
-                <span className="text-xs font-normal text-gray-500 ml-1">최근 10회차 추세 · 구간 흐름 · 대기 현황</span>
-              </h2>
-
-              {/* 1. 구간별 흐름 */}
-              <div className="mb-6">
-                <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
-                  <span>📊</span> 구간별 흐름 — 최근 5회 vs 이전 5회
-                </div>
-                <div className="grid grid-cols-5 gap-2">
-                  {segmentFlow.map(seg => {
-                    const st = segStyle[seg.trend];
-                    return (
-                      <div key={seg.label} className={`rounded-xl border p-3 flex flex-col items-center gap-1.5 ${st.bg}`}>
-                        <div className="text-[11px] font-bold text-gray-400">{seg.label}</div>
-                        <div className={`text-xl font-black ${st.text}`}>{st.icon}</div>
-                        <div className={`text-xs font-bold ${st.text}`}>{seg.trend}</div>
-                        <div className="text-[10px] text-gray-500">{seg.recent5} / {seg.prev5}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 2. 최근 추세 분류 */}
-              <div className="mb-6">
-                <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
-                  <span>📈</span> 최근 추세 분류
-                </div>
-                <div className="space-y-2">
-                  {(['급등', '상승', '안정', '하락', '급락'] as const).map(t => {
-                    const nums = trendGroups[t];
-                    if (!nums || nums.length === 0) return null;
-                    return (
-                      <div key={t} className="flex items-start gap-2 flex-wrap">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex-shrink-0 min-w-[38px] text-center ${trendStyle[t]}`}>{t}</span>
-                        <div className="flex gap-1 flex-wrap">
-                          {nums.map(n => (
-                            <span key={n}
-                              className={`text-[11px] font-bold px-1.5 py-0.5 rounded cursor-pointer hover:scale-110 transition-transform inline-block ${trendStyle[t]}`}
-                              onClick={() => handleBallClick(n)}>
-                              {n}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 3. 장기 대기 번호 — 심층 분석 (미출 기간·평균·조건부 재출현율) */}
-              {absenceReport && absenceReport.details.length > 0 && (() => {
-                const fmtPct = (v: number | null) => (v === null ? '─' : `${(v * 100).toFixed(0)}%`);
-                const gradeBadge: Record<string, string> = {
-                  A: 'text-red-300 bg-red-900/50 border border-red-700/60',
-                  B: 'text-yellow-300 bg-yellow-900/40 border border-yellow-700/60',
-                  C: 'text-gray-400 bg-gray-700/50 border border-gray-600/50',
-                };
-                return (
-                <div className="mb-6">
-                  <div className="text-xs font-bold text-gray-400 mb-1.5 flex items-center gap-1.5">
-                    <span>⏳</span> 장기 대기 번호 — 10회차 이상 미출현 (초과율 높은 순)
-                  </div>
-                  <div className="text-[11px] text-gray-500 mb-3">
-                    다음 회차에 이 집합 중 1개 이상 출현 — 균등가정 {(absenceReport.nullProbNext * 100).toFixed(1)}% ·
-                    과거 실측 {absenceReport.empiricalNextRate === null
-                      ? `표본 부족 (${absenceReport.empiricalSamples}건)`
-                      : `${(absenceReport.empiricalNextRate * 100).toFixed(1)}% (${absenceReport.empiricalSamples}건)`}
-                  </div>
-                  <div className="bg-gray-900/80 rounded-xl border border-gray-700/60 p-4 space-y-3">
-                    {absenceReport.details.map(d => {
-                      const pct = Math.min(100, ((d.overdueRatio - 1) / 4) * 100);
-                      const barCls  = d.overdueRatio >= 3 ? 'bg-red-500' : d.overdueRatio >= 2 ? 'bg-orange-500' : 'bg-yellow-500';
-                      const textCls = d.overdueRatio >= 3 ? 'text-red-300' : d.overdueRatio >= 2 ? 'text-orange-300' : 'text-yellow-300';
-                      return (
-                        <div key={d.number}>
-                          <div className="flex items-center gap-2 cursor-pointer" onClick={() => handleBallClick(d.number)}>
-                            <div className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs flex-shrink-0 bg-gray-700 text-gray-200">
-                              {d.number}
-                            </div>
-                            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0 ${gradeBadge[d.grade]}`}
-                                  title={d.grade === 'A' ? '초과 2배+ · 주기적' : d.grade === 'B' ? '초과 또는 주기적' : '그 외'}>
-                              {d.grade}
-                            </span>
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between mb-0.5 gap-2">
-                                <span className="text-[10px] text-gray-500">{d.curGap}회 대기 (약 {d.curWeeks}주) / 평균 {d.avgGap}회</span>
-                                <span className={`text-[11px] font-bold ${textCls}`}>{d.overdueRatio.toFixed(1)}×</span>
-                              </div>
-                              <div className="w-full h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                                <div className={`h-full rounded-full ${barCls}`} style={{ width: `${pct}%` }} />
-                              </div>
-                              <div className="text-[10px] text-gray-500 mt-1">
-                                장기평균 {d.avgLongSpell === null ? '─' : `${d.avgLongSpell}회`} ·
-                                역대최장 {d.maxSpell === null ? '─' : `${d.maxSpell}회`} ({d.longSpellCount}건) ·
-                                주기 {d.isPeriodic ? `규칙적(CV ${d.cv})` : `불규칙(CV ${d.cv})`}
-                              </div>
-                              <div className="text-[10px] text-gray-500">
-                                재출현율 1회 {fmtPct(d.reappear1)} · 3회 {fmtPct(d.reappear3)} (표본 {d.reappearSamples}건{d.reappearSamples < 3 ? ' — 부족' : ''}) ·
-                                앙코르 {fmtPct(d.encoreRate)} ({d.encoreSamples}건)
-                              </div>
-                              {d.coReturn.length > 0 && (
-                                <div className="text-[10px] text-gray-500">
-                                  동반 복귀: {d.coReturn.map(c => `${c.number}번 ${c.count}회`).join(' · ')}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="text-[10px] text-gray-600 mt-1.5">
-                    율값은 과거 동일 대기 깊이 도달 사례 기준이며 표본 3건 미만은 ─ 표시. 등급은 서술용(확률 아님).
-                  </div>
-                </div>
-                );
-              })()}
-
-              {/* 4. 상위 6개 번호 흐름 근거 (융합 선정 + 디테일 흐름) */}
-              <div>
-                <div className="text-xs font-bold text-gray-400 mb-3 flex items-center gap-1.5">
-                  <span>🏆</span> 상위 6개 번호 흐름 근거
-                  <span className="font-normal text-gray-600">— 융합 순위 공유 · 추세/대기/연결/구간 근거</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {fusedTop6.map((row, idx) => {
-                    const trend  = trends[row.number] ?? '안정';
-                    const gap    = gapInfo[row.number];
-                    const conn   = connectionScores?.[row.number];
-                    const seg    = segOf(row.number);
-                    const isBack = recentlyBack.includes(row.number);
-                    const isOverdue = gap && gap.overdueRatio >= 1.2;
-                    const reasons: string[] = [];
-                    if (trend === '급락')      reasons.push('급락 후 반등 기대');
-                    else if (trend === '급등') reasons.push('상승 모멘텀 유지');
-                    else if (trend === '상승') reasons.push('안정적 상승세');
-                    else if (trend === '하락') reasons.push('저활성 → 회귀 가능');
-                    if (isOverdue && gap) reasons.push(`${gap.curGap}회 대기 (평균 ${gap.avgGap}회 · ${gap.overdueRatio.toFixed(1)}× 초과)`);
-                    else if (gap)         reasons.push(`${gap.curGap}회 대기 (평균 ${gap.avgGap}회)`);
-                    if (conn !== undefined) reasons.push(`연결강도 ${conn.toFixed(0)}/100`);
-                    if (seg) reasons.push(`구간 [${seg.label}] ${seg.trend}`);
-                    if (isBack)              reasons.push('장기 공백 후 복귀');
-                    if (gap?.isPeriodic)     reasons.push('주기적 출현 패턴');
-                    if (reasons.length === 0) reasons.push('지표 종합 우위');
-                    return (
-                      <div key={row.number}
-                           className="bg-gray-900/80 rounded-xl border border-gray-700/60 p-3 flex items-start gap-3 cursor-pointer hover:bg-gray-700/30 transition-colors"
-                           onClick={() => handleBallClick(row.number)}
-                           title={`융합 ${row.fusedScore.toFixed(1)}점 · 합의 ${row.agreement5}/5 · 안정 ${row.stability === null ? '─' : `${Math.round(row.stability * 100)}%`}${row.contested ? ' · 의견 분열' : ''}`}>
-                        <div className="flex flex-col items-center gap-1 flex-shrink-0">
-                          <div className="text-[9px] text-gray-600 font-bold">#{idx + 1}</div>
-                          <Ball num={row.number} small />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${trendStyle[trend] ?? trendStyle['안정']}`}>{trend}</span>
-                            {gap && <span className="text-[10px] text-gray-500">{gap.curGap}회 대기</span>}
-                            {conn !== undefined && <span className="text-[10px] text-gray-500">연결 {conn.toFixed(0)}</span>}
-                            {row.contested && <span className="text-[10px] font-bold text-red-300">※분열</span>}
-                          </div>
-                          <div className="text-[11px] text-gray-400 leading-relaxed">{reasons.join(' · ')}</div>
-                          <div className="text-[10px] text-gray-600 mt-0.5">
-                            융합 {row.fusedScore.toFixed(1)} · 합의 {row.agreement5}/5 · 안정 {row.stability === null ? '─' : `${Math.round(row.stability * 100)}%`}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {flowAnalysis && fusedTable.length > 0 && (
+          <FlowPanel
+            trends={flowAnalysis.trends}
+            gapInfo={flowAnalysis.gapInfo}
+            segmentFlow={flowAnalysis.segmentFlow}
+            recentlyBack={flowAnalysis.recentlyBack}
+            connectionScores={flowAnalysis.connectionScores}
+            absence={absenceReport}
+            fusedTop6={fusedTable.slice(0, 6)}
+            onBallClick={handleBallClick}
+          />
+        )}
 
         {/* ══ [3] 주요 통계 분석 ══ */}
         {/* 출현 빈도 순위 (전체 1~45, 15개씩 3페이지) */}
@@ -1282,7 +849,7 @@ const App: React.FC = () => {
         </div>
 
         {/* ══ [4] 보조 분석 — 최근 당첨 번호 ══ */}
-        <div className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/40 mt-8">
+        <div className="ko-flow bg-gray-800 rounded-2xl p-4 sm:p-6 md:p-8 shadow-xl border border-blue-900/40 mt-8">
           <div className="flex flex-col md:flex-row items-center justify-between border-b border-gray-700/60 pb-4 mb-6">
             <h2 className="text-lg font-bold text-blue-300 flex items-center gap-2"><span>📅</span> 보조 분석 — 최근 당첨 번호</h2>
             <div className="text-xs sm:text-sm text-gray-400 bg-gray-700/40 px-3 py-2 rounded-xl mt-3 md:mt-0 flex flex-col sm:flex-row items-center gap-1 sm:gap-3 text-center break-keep break-words">
@@ -1291,6 +858,7 @@ const App: React.FC = () => {
               <span className="text-green-400">📋 번호 외 영역 클릭 → 회차 리포트</span>
             </div>
           </div>
+          <RecentDrawsSummary draws={allData.slice(0, 10)} metas={drawMetas} retro={evidence?.recent ?? null} />
           <div className="space-y-4">
             {allData.slice(0, 10).map((draw, idx) => {
               const isExpanded = expandedDrawRound === draw.round;
@@ -1334,6 +902,8 @@ const App: React.FC = () => {
                     {isExpanded ? '▲' : '▼'}
                   </div>
                 </div>
+
+                {drawMetas[idx] && <RecentDrawStrip meta={drawMetas[idx]} retro={retroByRound.get(draw.round)} />}
 
                 {/* ── 회차 분석 리포트 (행 바로 아래 인라인 확장) ── */}
                 {isExpanded && dynamicData && (
