@@ -33,12 +33,3 @@ export const INDICATOR_LABELS: Array<{ key: 'zSubScore' | 'bbSubScore' | 'rsiSub
   { key: 'maSubScore', short: '추세', title: '추세 묶음 — EMA·MACD 추세 + 공백 초과(식을수록 높음)' },
   { key: 'aroonSubScore', short: '확인', title: '확인 묶음 — ADX·ATR + Aroon 공백(공백이 길수록 높음)' },
 ];
-
-/** 순위 → 히트맵 셀 스타일 */
-export function heatClass(rank: number): string {
-  if (rank <= 6) return 'bg-emerald-600 text-white ring-2 ring-emerald-300/80 shadow-lg shadow-emerald-900/40';
-  if (rank <= 12) return 'bg-yellow-700/70 text-yellow-50 ring-1 ring-yellow-500/50';
-  if (rank <= 24) return 'bg-gray-600 text-gray-100';
-  if (rank <= 36) return 'bg-gray-700 text-gray-300';
-  return 'bg-gray-800 text-gray-500';
-}
