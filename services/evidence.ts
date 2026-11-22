@@ -42,6 +42,8 @@ export interface RetroPick {
   hitNumbers: number[];
   unified: number[];     // 같은 시점의 독립 스택 Top6
   unifiedHits: number;
+  fusedRanks: number[];  // [번호 1~45] 그 시점 융합 순위 (1=최상위, 동점은 평균 순위, 인덱스 0 은 미사용)
+  unifiedRanks: number[];// [번호 1~45] 그 시점 독립 스택 순위
 }
 
 export type Verdict = 'none' | 'weak' | 'edge' | 'worse';
@@ -217,6 +219,8 @@ export async function buildEvidenceReport(
         hits: hitNumbers.length, hitNumbers,
         unified: [...uniTop].sort((a, b) => a - b),
         unifiedHits: uniTop.filter(n => actual.includes(n)).length,
+        fusedRanks: ranksOf(vectors.fused),
+        unifiedRanks: ranksOf(vectors.unified),
       });
     }
 

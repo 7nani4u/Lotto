@@ -17,7 +17,9 @@ export interface DrawMeta {
   high: number;                // 23~45
   adjacentPairs: number;       // 이웃한 번호 쌍(n, n+1) 개수
   ac: number;                  // 산술 복잡도 = 서로 다른 차이값 수 − 5
+  ratio: number;               // 상위 3개 합 ÷ 하위 3개 합 (비율 필터의 측정값)
   decades: number[];           // 1~10 / 11~20 / 21~30 / 31~40 / 41~45
+  maxDecade: number;           // 한 번대에 몰린 최대 개수
   carry: number[];             // 직전 회차 본번호 중 다시 나온 번호(이월수)
   neighbors: number[];         // 직전 회차 번호의 ±1 로 나온 번호(이웃수)
   filters: Array<{ key: string; label: string; ok: boolean }>;
@@ -26,6 +28,9 @@ export interface DrawMeta {
 }
 
 export const THEORETICAL_SUM_MEAN = 138;   // 6 × 46 / 2
+
+/** 5개 필터를 모두 통과하는 조합의 비율 — 전수(8,145,060개) 실측: 6,657,176 / 8,145,060 (audit/FILTER_AUDIT_REPORT.md B) */
+export const FILTER_SPACE_PASS = 6657176 / 8145060;
 
 export function summarizeDraw(draw: LottoResult, prev?: LottoResult): DrawMeta {
   const nums = [...draw.numbers].sort((a, b) => a - b);
@@ -51,8 +56,11 @@ export function summarizeDraw(draw: LottoResult, prev?: LottoResult): DrawMeta {
     { key: 'ac', label: 'AC 5~10', ok: isValidAC(nums) },
   ];
   const failed = filters.filter(f => !f.ok).map(f => f.label);
+  const lowThree = nums[0] + nums[1] + nums[2];
+  const ratio = lowThree > 0 ? (nums[3] + nums[4] + nums[5]) / lowThree : 0;
   return {
-    sum, odd, even: 6 - odd, low, high: 6 - low, adjacentPairs, ac: diffs.size - 5, decades,
+    sum, odd, even: 6 - odd, low, high: 6 - low, adjacentPairs, ac: diffs.size - 5, ratio, decades,
+    maxDecade: Math.max(...decades),
     carry, neighbors, filters, passAll: failed.length === 0, failed,
   };
 }

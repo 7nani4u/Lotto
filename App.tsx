@@ -31,6 +31,8 @@ import { Ball } from './components/Ball';
 import { TopPicksPanel } from './components/TopPicksPanel';
 import { FlowPanel } from './components/FlowPanel';
 import { RecentDrawStrip, RecentDrawsSummary } from './components/RecentDrawStrip';
+import { DrawReport } from './components/DrawReport';
+import { buildHistoryProfile } from './services/drawReport';
 import { summarizeDraw } from './services/drawMeta';
 import { buildEvidenceReport, EvidenceReport } from './services/evidence';
 
@@ -272,6 +274,11 @@ const App: React.FC = () => {
     () => allData.slice(0, 10).map((draw, i) => summarizeDraw(draw, allData[i + 1])),
     [allData],
   );
+  // 회차 리포트의 "역대 실측" 기준 (전체 회차를 한 번만 집계)
+  const historyProfile = useMemo(
+    () => (allData.length > 0 ? buildHistoryProfile(allData) : null),
+    [allData],
+  );
   const retroByRound = useMemo(
     () => new Map((evidence?.recent ?? []).map(r => [r.round, r] as const)),
     [evidence],
@@ -411,80 +418,6 @@ const App: React.FC = () => {
 
   const handleRemoveFixedNumber = (num: number) => {
     setFixedNumbers((prev) => prev.filter((value) => value !== num));
-  };
-
-  // 동적으로 특정 회차의 리포트 데이터를 계산하는 함수
-  const generateDynamicReportData = (draw: LottoResult) => {
-    const nums = draw.numbers;
-
-    // 1. 구간 분포 계산
-    const distribution = [
-      { range: '1~10', count: nums.filter(n => n >= 1 && n <= 10).length },
-      { range: '11~20', count: nums.filter(n => n >= 11 && n <= 20).length },
-      { range: '21~30', count: nums.filter(n => n >= 21 && n <= 30).length },
-      { range: '31~40', count: nums.filter(n => n >= 31 && n <= 40).length },
-      { range: '41~45', count: nums.filter(n => n >= 41 && n <= 45).length },
-    ];
-
-    // 2. 홀짝 / 고저 계산
-    const odd = nums.filter(n => n % 2 !== 0).length;
-    const even = nums.filter(n => n % 2 === 0).length;
-    const low = nums.filter(n => n <= 22).length;
-    const high = nums.filter(n => n > 22).length;
-
-    // 3. 번호 합계
-    const sumTotal = nums.reduce((a, b) => a + b, 0);
-    const average = 139.4; // 이론적 평균
-    const deviation = +(sumTotal - average).toFixed(1);
-
-    // 4. 이전 회차 비교
-    const prevDrawIndex = allData.findIndex(d => d.round === draw.round - 1);
-    const prevDraw = prevDrawIndex !== -1 ? allData[prevDrawIndex] : null;
-    let prevNumbers: number[] = [];
-    let reappeared: number[] = [];
-    let newNumbers: number[] = [...nums];
-
-    if (prevDraw) {
-      prevNumbers = prevDraw.numbers;
-      reappeared = nums.filter(n => prevNumbers.includes(n));
-      newNumbers = nums.filter(n => !prevNumbers.includes(n));
-    }
-
-    // 5. 함께 자주 나온 쌍 (간단한 예시를 위해 해당 회차 번호들의 전체 동반 출현 빈도를 분석)
-    // 실제로는 전체 데이터를 순회해야 하지만 성능상 현재는 정적 데이터 또는 단순화된 데이터를 사용하거나
-    // 이전 분석 로직을 활용할 수 있습니다. 여기서는 1219회 데이터 구조와 호환되게 동적으로 계산합니다.
-    const pairs = [];
-    for (let i = 0; i < nums.length; i++) {
-      for (let j = i + 1; j < nums.length; j++) {
-        const pair = [nums[i], nums[j]].sort((a, b) => a - b);
-        let count = 0;
-        allData.forEach(d => {
-          if (d.numbers.includes(pair[0]) && d.numbers.includes(pair[1])) count++;
-        });
-        pairs.push({ pair, count, percentage: +((count / allData.length) * 100).toFixed(1) });
-      }
-    }
-    const frequentPairs = pairs.sort((a, b) => b.count - a.count).slice(0, 5);
-
-    return {
-      round: draw.round,
-      date: draw.date,
-      numbers: nums,
-      bonus: draw.bonus,
-      sections: {
-        distribution,
-        oddEven: { odd, even },
-        highLow: { low, high, lowRange: '1-22', highRange: '23-45' },
-        sum: { total: sumTotal, average, deviation, min: 100, max: 175 },
-        prevCompare: {
-          prevRound: draw.round - 1,
-          prevNumbers,
-          reappeared,
-          newNumbers,
-        },
-        frequentPairs,
-      }
-    };
   };
 
   const fixedNumbersRemaining = MAX_FIXED_NUMBERS - fixedNumbers.length;
@@ -777,12 +710,11 @@ const App: React.FC = () => {
         {flowAnalysis && fusedTable.length > 0 && (
           <FlowPanel
             trends={flowAnalysis.trends}
-            gapInfo={flowAnalysis.gapInfo}
             segmentFlow={flowAnalysis.segmentFlow}
             recentlyBack={flowAnalysis.recentlyBack}
-            connectionScores={flowAnalysis.connectionScores}
             absence={absenceReport}
-            fusedTop6={fusedTable.slice(0, 6)}
+            top6={fusedTable.slice(0, 6).map(r => r.number)}
+            rounds={allData.length >= 10 ? { from: allData[9].round, to: allData[0].round } : null}
             onBallClick={handleBallClick}
           />
         )}
@@ -862,7 +794,6 @@ const App: React.FC = () => {
           <div className="space-y-4">
             {allData.slice(0, 10).map((draw, idx) => {
               const isExpanded = expandedDrawRound === draw.round;
-              const dynamicData = isExpanded ? generateDynamicReportData(draw) : null;
               
               return (
               <div key={idx} className="flex flex-col gap-2">
@@ -905,172 +836,17 @@ const App: React.FC = () => {
 
                 {drawMetas[idx] && <RecentDrawStrip meta={drawMetas[idx]} retro={retroByRound.get(draw.round)} />}
 
-                {/* ── 회차 분석 리포트 (행 바로 아래 인라인 확장) ── */}
-                {isExpanded && dynamicData && (
-                  <div className="bg-gray-800/80 rounded-xl p-4 sm:p-6 md:p-8 shadow-inner border border-green-900/30 mt-2 mb-4 animate-fade-in ml-0 md:ml-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-700 pb-4 mb-6 gap-3">
-                      <h2 className="text-lg sm:text-xl font-bold text-green-300 flex items-center gap-2">
-                        <span>📋</span>
-                        <span className="break-keep break-words">제 {dynamicData.round}회 당첨 번호 분석 리포트</span>
-                      </h2>
-                    </div>
-
-                    <div className="space-y-6 text-gray-200">
-                      {/* 1. 당첨 번호 요약 */}
-                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
-                        <div className="text-center mb-4">
-                          <div className="text-sm text-gray-400 mb-1">{dynamicData.date}</div>
-                          <div className="text-xl font-black text-white">제 {dynamicData.round}회 당첨 번호</div>
-                        </div>
-                        <div className="flex items-center justify-center gap-2 sm:gap-3 flex-wrap">
-                          {dynamicData.numbers.map(num => (
-                            <Ball key={num} num={num} onClick={() => handleBallClick(num)} />
-                          ))}
-                          <div className="text-gray-500 text-2xl mx-1 font-light">+</div>
-                          <Ball num={dynamicData.bonus} isBonus onClick={() => handleBallClick(dynamicData.bonus)} />
-                        </div>
-                      </div>
-
-                      {/* 2. 구간 분포 & 홀짝/고저 */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
-                          <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
-                            <span>📊</span> 구간 분포
-                          </h3>
-                          <div className="space-y-3">
-                            {dynamicData.sections.distribution.map((item, idx) => (
-                              <div key={idx} className="flex items-center gap-3">
-                                <span className="text-xs text-gray-400 w-12 text-right">{item.range}</span>
-                                <div className="flex-1 h-4 bg-gray-800 rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-green-500 rounded-full"
-                                    style={{ width: `${(item.count / 3) * 100}%` }}
-                                  />
-                                </div>
-                                <span className="text-sm font-bold text-white w-6">{item.count}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
-                          <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
-                            <span>⚖️</span> 홀짝 · 고저
-                          </h3>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="bg-gray-800 p-3 rounded-lg text-center border border-gray-700/60/60">
-                              <div className="text-xs text-gray-400 mb-1">홀짝 비율</div>
-                              <div className="text-xl font-black text-blue-300">
-                                {dynamicData.sections.oddEven.odd} : {dynamicData.sections.oddEven.even}
-                              </div>
-                            </div>
-                            <div className="bg-gray-800 p-3 rounded-lg text-center border border-gray-700/60/60">
-                              <div className="text-xs text-gray-400 mb-1">고저 비율</div>
-                              <div className="text-xl font-black text-purple-300">
-                                {dynamicData.sections.highLow.low} : {dynamicData.sections.highLow.high}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="mt-3 text-xs text-gray-500 text-center">
-                            저({dynamicData.sections.highLow.lowRange}) / 고({dynamicData.sections.highLow.highRange})
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 3. 번호 합계 */}
-                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60 flex flex-col sm:flex-row items-center justify-between gap-4">
-                        <div className="flex items-center gap-2">
-                          <span>➕</span>
-                          <span className="text-sm font-bold text-gray-300">번호 합계</span>
-                        </div>
-                        <div className="flex items-center gap-6">
-                          <div className="text-center">
-                            <div className="text-xs text-gray-400">합계</div>
-                            <div className="text-xl font-black text-white">{dynamicData.sections.sum.total}</div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-xs text-gray-400">이론 평균</div>
-                            <div className="text-lg font-bold text-gray-300">{dynamicData.sections.sum.average}</div>
-                          </div>
-                          <div className="text-center">
-                            <div className="text-xs text-gray-400">편차</div>
-                            <div className={`text-lg font-bold ${dynamicData.sections.sum.deviation < 0 ? 'text-blue-400' : 'text-red-400'}`}>
-                              {dynamicData.sections.sum.deviation > 0 ? '+' : ''}{dynamicData.sections.sum.deviation}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 4. 이전 회차 비교 */}
-                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
-                        <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
-                          <span>🔄</span> 이전 회차 비교
-                          <span className="text-xs text-gray-500 font-normal ml-2">({dynamicData.sections.prevCompare.prevRound}회 → {dynamicData.round}회)</span>
-                        </h3>
-                        <div className="space-y-4">
-                          <div>
-                            <div className="text-xs text-gray-400 mb-2">이전 회차 번호</div>
-                            <div className="flex gap-2 flex-wrap">
-                              {dynamicData.sections.prevCompare.prevNumbers.length > 0 ? (
-                                dynamicData.sections.prevCompare.prevNumbers.map(n => (
-                                  <Ball key={`prev-${n}`} num={n} small onClick={() => handleBallClick(n)} />
-                                ))
-                              ) : (
-                                <div className="text-sm text-gray-500">데이터 없음</div>
-                              )}
-                            </div>
-                          </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                            <div className="bg-gray-800 p-3 rounded-lg border border-gray-700/60">
-                              <div className="text-xs text-gray-400 mb-2">재등장 ({dynamicData.sections.prevCompare.reappeared.length}개)</div>
-                              <div className="flex gap-2 flex-wrap">
-                                {dynamicData.sections.prevCompare.reappeared.map(n => (
-                                  <Ball key={`re-${n}`} num={n} small onClick={() => handleBallClick(n)} />
-                                ))}
-                              </div>
-                            </div>
-                            <div className="bg-gray-800 p-3 rounded-lg border border-gray-700/60">
-                              <div className="text-xs text-gray-400 mb-2">신규 ({dynamicData.sections.prevCompare.newNumbers.length}개)</div>
-                              <div className="flex gap-2 flex-wrap">
-                                {dynamicData.sections.prevCompare.newNumbers.map(n => (
-                                  <Ball key={`new-${n}`} num={n} small onClick={() => handleBallClick(n)} />
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 5. 함께 자주 나온 쌍 Top 5 */}
-                      <div className="bg-gray-900/80 p-5 rounded-xl border border-gray-700/60">
-                        <h3 className="text-sm font-bold text-gray-300 mb-4 flex items-center gap-2">
-                          <span>🔗</span> 함께 자주 나온 쌍 Top 5
-                        </h3>
-                        <div className="space-y-3">
-                          {dynamicData.sections.frequentPairs.map((item, idx) => (
-                            <div key={idx} className="flex items-center gap-3 p-2 hover:bg-gray-800 rounded-lg transition-colors">
-                              <span className={`text-xs font-bold w-4 text-center ${idx < 3 ? 'text-yellow-400' : 'text-gray-500'}`}>
-                                {idx + 1}
-                              </span>
-                              <div className="flex items-center gap-1">
-                                <Ball num={item.pair[0]} small onClick={() => handleBallClick(item.pair[0])} />
-                                <span className="text-gray-500 text-xs mx-1">+</span>
-                                <Ball num={item.pair[1]} small onClick={() => handleBallClick(item.pair[1])} />
-                              </div>
-                              <div className="ml-auto text-right">
-                                <div className="text-sm font-bold text-white">{item.count}회</div>
-                                <div className="text-xs text-gray-400">({item.percentage.toFixed(1)}%)</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      
-                      <div className="text-center text-xs text-gray-500 pt-4">
-                        로또는 예측 불가합니다. 본 서비스의 분석 및 추천은 통계 참고 자료이며 당첨을 보장하지 않습니다.
-                      </div>
-                    </div>
-                  </div>
+                {/* ── 회차 분석 리포트 (행 바로 아래 인라인 확장) — components/DrawReport.tsx ── */}
+                {isExpanded && historyProfile && (
+                  <DrawReport
+                    results={allData}
+                    index={idx}
+                    profile={historyProfile}
+                    retro={retroByRound.get(draw.round)}
+                    evidenceVerdict={evidence?.verdictLabel ?? null}
+                    onBallClick={handleBallClick}
+                    onClose={() => setExpandedDrawRound(null)}
+                  />
                 )}
               </div>
             )})}
