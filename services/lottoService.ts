@@ -51,7 +51,17 @@ export async function fetchLatestDrawRound(): Promise<number> {
   } catch (error) {
     console.error('Failed to fetch latest draw:', error);
   }
-  return 1218;
+  return estimateLatestRound();
+}
+
+/**
+ * 네트워크 실패 시 대체값. 기존에는 1218 로 고정되어 이후 회차를 영원히 건너뛰었습니다.
+ * 1회차 = 2002-12-07(토) 20:45 KST(=11:45 UTC), 이후 매주 1회 → 날짜로 현재 회차를 추정합니다.
+ * (추정값이 아직 발표 전 회차여도 fetchDrawNumber 가 null 을 돌려줄 뿐이라 안전)
+ */
+export function estimateLatestRound(now: number = Date.now()): number {
+  const WEEK_MS = 7 * 24 * 3600 * 1000;
+  return Math.max(START_ROUND, Math.floor((now - Date.UTC(2002, 11, 7, 11, 45)) / WEEK_MS) + 1);
 }
 
 export const fetchLottoData = async (onProgress?: (progress: number, currentRound: number) => void): Promise<LottoResult[]> => {
@@ -868,7 +878,9 @@ export function buildTechnicalWeights(
       (-maSignal * 140) +
       (macdHist < 0 ? Math.abs(macdHist) * 190 : -macdHist * 130)
     );
-    const roundsSinceSeen = Math.max(0, results.findIndex(r => r.numbers.includes(num) || r.bonus === num));
+    // [수정] 한 번도 안 나온 번호는 findIndex = −1 → max(0, −1) = 0 으로 "방금 나온 번호"가 되었음.
+    const seenAt = results.findIndex(r => r.numbers.includes(num) || r.bonus === num);
+    const roundsSinceSeen = seenAt < 0 ? results.length : seenAt;
     const overdueScore = clampScore((roundsSinceSeen / 16) * 100);
     const trendScore = clampScore(trendBaseScore * 0.75 + overdueScore * 0.25);
     const adxScore = clampScore(adx >= 18 ? 55 + Math.min(25, adx * 0.6) : 35 + adx * 0.8);
@@ -928,19 +940,19 @@ export function buildTechnicalWeights(
 // 계산하고 평균 회귀 방향으로 0~100 정규화한 뒤 가중 합산하여
 // 번호별 "출현 가능성 점수" 테이블을 반환합니다.
 //
-// [가중치]
-//   Z-Score     30% — 전체 히스토리 기반 빈도 통계 편차 (가장 신뢰도 높음)
-//   볼린저 %B   25% — 롤링 30회 횡단면 밴드 위치 (최근 분산 반영)
-//   RSI         20% — 최근 20회 출현/미출현 모멘텀
-//   MA          15% — 단기(10)/장기(30) 빈도 교차 신호
-//   Aroon       10% — 마지막 출현 재귀 + 최장 공백 지표
+// [실제 가중치 — buildTechnicalWeights 의 DEFAULT_HYBRID_CONFIG 와 동일. 이전 주석(Z 30·BB 25·RSI 20·MA 15·Aroon 10)은
+//  현행 코드와 달라 정정함]
+//   종합 = 0.25·Z + 0.30·평균회귀(0.5·BB + 0.3·RSI + 0.2·Z) + 0.25·추세 + 0.20·확인
+//   · 추세(maSubScore 로 노출)  = 0.75·(50 − 140·MA신호 ± MACD) + 0.25·공백초과(16회 기준)
+//   · 확인(aroonSubScore 로 노출) = 0.45·ADX + 0.30·ATR + 0.25·Aroon공백
+//   → 표의 "MA"/"Ar" 서브점수는 이름과 달리 각각 "추세 묶음"/"확인 묶음"의 점수입니다.
 //
 // [정규화 방향 — "과소출현 = 높은 점수"]
-//   Z-Score  → (-z + 3) / 6 × 100          (z 음수 = 저출현 → 높은 점수)
+//   Z-Score  → (-z + 2.6) / 5.2 × 100       (z 음수 = 저출현 → 높은 점수)
 //   볼린저%B → (1 − %B) × 100               (하단밴드 근처 → 높은 점수)
-//   RSI      → 100 − rsi                    (낮은 RSI = 과소출현 → 높은 점수)
-//   MA       → (−signal + 0.30) / 0.60 × 100 (빈도 감소 추세 → 높은 점수)
-//   Aroon    → (−osc + 100) / 2             (장기 공백 → 높은 점수)
+//   RSI      → 100 − rsi                    (낮은 RSI = 과소출현 → 높은 점수; 7/45 출현율이면 RSI≈15 라 구조적으로 높음)
+//   추세     → 50 − 140·maSignal …          (빈도 감소 추세 → 높은 점수)
+//   확인     → ADX·ATR·Aroon 공백 가중       (장기 공백 → 높은 점수)
 // ==========================================
 
 export interface FullIndicatorAnalysis {
@@ -1210,9 +1222,17 @@ export interface AbsenceDetail {
 export interface LongAbsentReport {
   details: AbsenceDetail[];   // 초과율 내림차순, 상위 topN
   setSize: number;
-  nullProbNext: number;       // 균등가정 시 다음 회차 집합 중 1개+ 출현 정확 확률
+  nullProbNext: number;       // 균등가정 시 "표시된 집합(setSize개)"에서 다음 회차에 1개+ 출현할 정확 확률
   empiricalNextRate: number | null; // walk-forward 실측 (표본 부족 시 null)
   empiricalSamples: number;
+  /**
+   * [수정] 실측과 비교해야 할 균등가정 값. 실측 집합은 시점마다 크기가 다르므로(실측 989회차: 평균 8.3개)
+   * 표시 집합 크기(10개)의 균등가정(80.1 %)과 비교하면 "실측이 8.8%p 낮다"는 허위 차이가 생겼습니다.
+   * 같은 표본 각각의 집합 크기로 계산한 균등가정 평균(71.2 %)과 비교해야 합니다.
+   */
+  empiricalNullRate: number | null;
+  empiricalAvgSetSize: number | null;
+  fullSetSize: number;        // 현재 minGap회 이상 미출현인 번호 전체 수 (표시는 상위 topN개)
 }
 
 function comb645(n: number, k: number): number {
@@ -1371,7 +1391,8 @@ export function buildLongAbsentDetails(
 
   // ── 집합 지표: 균등가정 정확 확률 + walk-forward 실측 ──
   const nullProbNext = m > 0 ? 1 - comb645(45 - m, 6) / comb645(45, 6) : 0;
-  let empHit = 0, empN = 0;
+  let empHit = 0, empN = 0, empNullSum = 0, empSizeSum = 0;
+  const denom645 = comb645(45, 6);
   for (let i = 1; i + minGap - 1 < L; i++) {
     // draws[i] 기준 과거 minGap회 전원 미출 집합 (i와 그보다 오래된 회차)
     const set: number[] = [];
@@ -1384,6 +1405,8 @@ export function buildLongAbsentDetails(
     }
     if (set.length === 0) continue;
     empN++;
+    empSizeSum += set.length;
+    empNullSum += 1 - comb645(45 - set.length, 6) / denom645;   // 이 표본의 집합 크기에 대한 균등가정 정확값
     const nextMains = results[i - 1].numbers; // 다음(최신 방향) 회차 본번호
     if (nextMains.some(x => set.includes(x))) empHit++;
   }
@@ -1394,6 +1417,9 @@ export function buildLongAbsentDetails(
     nullProbNext: +nullProbNext.toFixed(4),
     empiricalNextRate: empN >= 20 ? +(empHit / empN).toFixed(4) : null,
     empiricalSamples: empN,
+    empiricalNullRate: empN >= 20 ? +(empNullSum / empN).toFixed(4) : null,
+    empiricalAvgSetSize: empN >= 20 ? +(empSizeSum / empN).toFixed(2) : null,
+    fullSetSize: details.length,
   };
 }
 
@@ -1429,9 +1455,10 @@ export interface SecondOpinion {
  * 세컨드 오피니언 — services/formulas 5엔진 통합 스택을 라이브 예측과 병렬 실행.
  *
  * [도입 이유] formulas/는 라이브와 같은 6/45 예측 스택이었으나 어디에서도
- * 호출되지 않는 데드코드였습니다. 삭제 대신 융합 Top6와의 일치도를 공개해
- * 스택 간 다변화 신호로 활용합니다. 일치도가 높으면 선택이 강건하고,
- * 낮으면 모델 의존적이라는 의미이며, 어느 쪽도 적중률 우위가 아닙니다.
+ * 호출되지 않는 데드코드였습니다. 삭제 대신 융합 Top6와의 일치도를 공개합니다.
+ * [해석 주의] 두 스택은 모두 "공백·평균회귀" 계열이라 서로 상관이 큽니다. 실측 989회차 최근 200시점에서
+ * 평균 일치는 2.37개(무작위 기대 0.80개)였으므로 "2개 일치"는 평균 이하입니다. 일치 개수는 반드시
+ * 이 기준선(evidence.overlapMean)과 함께 읽어야 하며, 어느 쪽도 적중률 우위를 뜻하지 않습니다.
  * 30회차 미만이면 QA 가드가 0점을 반환해 [1..6] 퇴화가 나오므로 null.
  */
 export function secondOpinion645(
@@ -1465,11 +1492,14 @@ export interface FusedRow {
   ensRank: number;
   fusedScore: number;
   fusedRank: number;
-  agreement5: number;       // 5종 서브점수 중 65점 이상 개수
+  agreement5: number;       // 5종 서브점수 각각에서 상위 12위 이내(AGREEMENT_TOP_N)에 든 개수 (무작위 기대 1.33)
   stability: number | null; // 0~1 재현율, 미측정 시 null
   tier: TierKey;
   contested: boolean;       // |ensRank − fusedRank| ≥ 10
 }
+
+/** 합의(agreement5) 기준: 각 서브점수의 횡단면 상위 N위. 12 = 45개의 약 27 % */
+export const AGREEMENT_TOP_N = 12;
 
 export function buildFusedTable(
   table: FullIndicatorAnalysis[],
@@ -1479,6 +1509,14 @@ export function buildFusedTable(
 ): FusedRow[] {
   const w = Math.max(0, Math.min(1, flowWeight));
   const byNum = new Map(table.map(t => [t.number, t]));
+  // [수정] 합의 = "서브점수 ≥ 65" 였으나 RSI 서브점수(100−RSI)가 구조적으로 높아
+  // (실측 989회차: 최소 58.3 · 중앙 83.3 · 75 %가 ≥65) 합의 수가 RSI 하나로 부풀려졌음.
+  // 절대 기준 대신 각 서브점수 안에서의 순위(상위 12위)로 판정해 지표 간 척도 차이를 제거.
+  const subKeys = ['zSubScore', 'bbSubScore', 'rsiSubScore', 'maSubScore', 'aroonSubScore'] as const;
+  const topSets = subKeys.map(key =>
+    new Set([...table].sort((a, b) => b[key] - a[key] || a.number - b.number)
+      .slice(0, AGREEMENT_TOP_N).map(t => t.number)),
+  );
   const rows: FusedRow[] = [];
   for (let n = 1; n <= 45; n++) {
     const t = byNum.get(n);
@@ -1490,8 +1528,7 @@ export function buildFusedTable(
       ensRank: t.rank,
       fusedScore: +((1 - w) * t.compositeScore + w * fl).toFixed(2),
       fusedRank: 0,
-      agreement5: [t.zSubScore, t.bbSubScore, t.rsiSubScore, t.maSubScore, t.aroonSubScore]
-        .filter(v => v >= 65).length,
+      agreement5: topSets.filter(set => set.has(n)).length,
       stability: stability ? (stability[n] ?? null) : null,
       tier: 'mid',
       contested: false,
@@ -1506,6 +1543,22 @@ export function buildFusedTable(
   return rows;
 }
 
+/**
+ * 시드 고정 의사난수 (mulberry32). 기존 구현은 `(s * 1103515245 + 12345) & 0x7fffffff` 였는데,
+ * s·1103515245 가 2^53 을 넘어 부동소수 반올림으로 하위 비트가 소실되었습니다
+ * (실측: 20,000회 호출에서 서로 다른 상태 12,053개, 짝수 상태 99.6 %) → 서브샘플이 편향됨.
+ */
+export function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 export function computeStability(
   results: LottoResult[],
   iters: number = 10,
@@ -1513,19 +1566,21 @@ export function computeStability(
   topk: number = 6,
   seed: number = 917,
 ): Record<number, number> | null {
-  // Python compute_stability() 와 동일: 순서-preserving 80% 서브샘플 ×
-  // 융합 상위 진입율. 30회차 미만이면 null (엔진 최소 윈도우 미달).
-  // 사이트 기본 10회 (Python 20회보다 적음 — 브라우저 부하 고려).
+  // 순서-preserving 80% 서브샘플(비복원) × 융합 상위 진입율. 30회차 미만이면 null (엔진 최소 윈도우 미달).
+  // 안정도 = "입력 회차를 20% 빼도 같은 번호가 Top6 에 남는가" — 선택의 재현성이지 적중률이 아님.
   if (iters <= 0 || results.length < 30) return null;
-  let s = seed;
-  const rand = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+  const rand = seededRandom(seed);
   const m = Math.max(20, Math.floor(results.length * 0.8));
   const counts = {} as Record<number, number>;
   for (let n = 1; n <= 45; n++) counts[n] = 0;
   for (let k = 0; k < iters; k++) {
-    const idx = new Set<number>();
-    while (idx.size < m) idx.add(Math.floor(rand() * results.length));
-    const sub = [...idx].sort((a, b) => a - b).map(i => results[i]);
+    // 부분 Fisher–Yates: 앞쪽 m개가 비복원 표본 (무한 루프·중복 재추첨 없음)
+    const order = Array.from({ length: results.length }, (_, i) => i);
+    for (let i = 0; i < m; i++) {
+      const j = i + Math.floor(rand() * (order.length - i));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    const sub = order.slice(0, m).sort((a, b) => a - b).map(i => results[i]);
     if (sub.length < 10) continue;
     const fused = buildFusedTable(buildFullAnalysisTable(sub), buildFlowSignals(sub), flowWeight);
     fused.slice(0, topk).forEach(r => { counts[r.number]++; });
@@ -1748,11 +1803,11 @@ function buildSelectionReason(
 // ==========================================
 // 9. PREDICTION ENGINE
 // ==========================================
-const ADVANCED_SUM_MIN = 85;
-const ADVANCED_SUM_MAX = 189;
+export const ADVANCED_SUM_MIN = 85;
+export const ADVANCED_SUM_MAX = 189;
 
 const PYTHON_FILTER_FORMULAS = [
-  'AC산술복잡도', '합46(Sum46)', '상/하위 비율', '연속번호 제한',
+  'AC산술복잡도', '합46(Sum46, AC에 포함)', '상/하위 비율', '연속번호 제한',
   `총합(${ADVANCED_SUM_MIN}~${ADVANCED_SUM_MAX})`, '번대별 분산',
 ];
 
@@ -1763,11 +1818,85 @@ function buildPredictionResult(numbers: number[], confidence: number, formulasUs
   return { numbers, confidence, formulasUsed: Array.from(new Set(formulasUsed)), selectionReason, stats: { sum, oddEvenRatio: `${odd}:${even}`, highLowRatio: `${high}:${low}` } };
 }
 
-function passesPythonFilters(numbers: number[]): boolean {
+/**
+ * 명세(reference) 판정 — isValidXxx 함수의 합성. 비정상 입력(6개가 아니거나 중복·범위 밖)과
+ * 동등성 검증(audit/verify_filters_ts.mjs)의 기준으로 유지합니다.
+ */
+function passesPythonFiltersSpec(numbers: number[]): boolean {
   const sum = numbers.reduce((a, b) => a + b, 0);
   return sum >= ADVANCED_SUM_MIN && sum <= ADVANCED_SUM_MAX &&
     isValidAC(numbers) && isValidSum46(numbers) &&
     isValidRatio(numbers) && isValidRangePattern(numbers) && isValidConsecutive(numbers);
+}
+
+const AC_SEEN = new Int32Array(46);
+let acStamp = 0;
+
+/**
+ * 고속 판정 — 오름차순·서로 다른 6개·1~45 입력 전용 (Python generate_lotto_combinations.passes_all_filters 와 동일 로직).
+ *  · Sum46 제외: 전수 8,145,060개 실측으로 Sum46 탈락 1,540개의 AC가 전부 0~4 (AC<5) → AC 탈락에 100% 포함.
+ *    (증명: 합 46 쌍이 3개면 6개 수는 a,46-a,b,46-b,c,46-c 형태 → 거울대칭으로 15개 차이값이 최대 9종 → AC≤4)
+ *  · 정렬·배열 복사·Set 생성 없이 1회 판정, 값싼 필터(총합·비율·번대·연속)를 앞에 두고 AC를 마지막에 둠.
+ *  · 비율은 부동소수 나눗셈 대신 정수 교차곱 (hi·10 ≥ lo·13, hi·2 ≤ lo·15) — 판정 동일.
+ */
+function passesPythonFiltersSorted(s: number[]): boolean {
+  return passesSixSorted(s[0], s[1], s[2], s[3], s[4], s[5]);
+}
+
+/** AC 차이값 표시: 처음 보는 차이값이면 1, 이미 본 값이면 0 (stamp 방식이라 매 호출 초기화 불필요) */
+function acNew(dv: number, stamp: number): number {
+  if (AC_SEEN[dv] === stamp) return 0;
+  AC_SEEN[dv] = stamp;
+  return 1;
+}
+
+/** 배열 할당 없는 숫자 6개 버전 — 필터 통과 풀(buildFilteredPool) 전수 열거의 핫패스. 논리는 위 설명과 동일. */
+function passesSixSorted(a: number, b: number, c: number, d: number, e: number, f: number): boolean {
+  const sum = a + b + c + d + e + f;
+  if (sum < ADVANCED_SUM_MIN || sum > ADVANCED_SUM_MAX) return false;
+
+  const lo = a + b + c;
+  const hi = sum - lo;
+  if (hi * 10 < lo * 13 || hi * 2 > lo * 15) return false;
+
+  // 같은 번대(1~10, 11~20, …, 41~45)에 4개 이상 ⇔ 정렬 상 (a,d)·(b,e)·(c,f) 중 한 쌍이 같은 번대
+  if (Math.floor((a - 1) / 10) === Math.floor((d - 1) / 10) ||
+      Math.floor((b - 1) / 10) === Math.floor((e - 1) / 10) ||
+      Math.floor((c - 1) / 10) === Math.floor((f - 1) / 10)) return false;
+
+  // 연속: 3연속 금지, 2연속 쌍 최대 2개
+  let pairs = 0;
+  if (b === a + 1) { pairs++; if (c === a + 2) return false; }
+  if (c === b + 1) { pairs++; if (d === b + 2) return false; }
+  if (d === c + 1) { pairs++; if (e === c + 2) return false; }
+  if (e === d + 1) { pairs++; if (f === d + 2) return false; }
+  if (f === e + 1) pairs++;
+  if (pairs > 2) return false;
+
+  // AC = (서로 다른 차이값 수) − 5, 5 ≤ AC ≤ 10  → 서로 다른 차이값 10~15개
+  if (++acStamp >= 0x7fffffff) { AC_SEEN.fill(0); acStamp = 1; }
+  const stamp = acStamp;
+  const distinct =
+    acNew(b - a, stamp) + acNew(c - a, stamp) + acNew(d - a, stamp) + acNew(e - a, stamp) + acNew(f - a, stamp) +
+    acNew(c - b, stamp) + acNew(d - b, stamp) + acNew(e - b, stamp) + acNew(f - b, stamp) +
+    acNew(d - c, stamp) + acNew(e - c, stamp) + acNew(f - c, stamp) +
+    acNew(e - d, stamp) + acNew(f - d, stamp) +
+    acNew(f - e, stamp);
+  return distinct >= 10 && distinct <= 15;
+}
+
+function isStrictlyAscending(arr: number[]): boolean {
+  for (let i = 1; i < arr.length; i++) if (!(arr[i] > arr[i - 1])) return false;
+  return true;
+}
+
+function passesPythonFilters(numbers: number[]): boolean {
+  if (numbers.length === 6) {
+    const s = isStrictlyAscending(numbers) ? numbers : [...numbers].sort((x, y) => x - y);
+    // 정상 입력(서로 다른 6개, 1~45)만 고속 경로. 그 외는 명세 판정(Sum46 포함)으로 처리해 결과를 보존.
+    if (s[0] >= 1 && s[5] <= 45 && isStrictlyAscending(s)) return passesPythonFiltersSorted(s);
+  }
+  return passesPythonFiltersSpec(numbers);
 }
 
 function generateFallbackNumbers(): number[] {
@@ -1776,6 +1905,11 @@ function generateFallbackNumbers(): number[] {
   return Array.from(selected).sort((a, b) => a - b);
 }
 
+/**
+ * @deprecated 앱은 더 이상 이 함수를 쓰지 않습니다 — buildFilteredPoolAsync() 로 필터 통과 풀을 로컬에서 직접 만듭니다.
+ * 저장소의 lotto_combinations.txt 는 전체 유효 공간의 1.9 % 부분집합(번호 1·2·45 없음)이었고, 올바른 전체 파일은
+ * 114.3 MiB 라 GitHub 한도(100 MiB)를 넘습니다(audit/FILTER_AUDIT_REPORT.md 참조). 하위 호환을 위해 export 만 유지합니다.
+ */
 export async function fetchGithubCombinations(): Promise<number[][]> {
   try {
     const url = 'https://raw.githubusercontent.com/7nani4u/Lotto/main/lotto_combinations.txt';
@@ -1795,6 +1929,159 @@ export async function fetchGithubCombinations(): Promise<number[][]> {
     }
     return combinations;
   } catch (error) { console.error('GitHub 파일 파싱 오류:', error); return []; }
+}
+
+// ==========================================
+// 9.5 FILTERED COMBINATION POOL (경로 A 후보 풀 — 네트워크 파일 대체)
+// ==========================================
+/**
+ * 필터(passesPythonFilters)를 통과하는 모든 조합을 6바이트씩 연속 저장한 압축 풀.
+ * rows[6*i .. 6*i+5] = i번째 조합(오름차순). 순서는 사전식(= Python generate_lotto_combinations 출력 순서)과 같습니다.
+ * 현행 필터 기준 6,657,176개 × 6B ≈ 40 MB (number[][] 로 만들면 수백 MB).
+ */
+export interface CombinationPool {
+  rows: Uint8Array;
+  count: number;
+}
+
+const POOL_MAX_ROWS = 8_145_060;   // C(45,6)
+
+/** (a, b) 를 고정하고 c<d<e<f 를 열거하여 필터 통과 조합을 rows 에 덧붙입니다. 반환: 새 행 수. */
+function appendPoolRange(rows: Uint8Array, n: number, a: number, b: number): number {
+  for (let c = b + 1; c <= 42; c++)
+    for (let d = c + 1; d <= 43; d++)
+      for (let e = d + 1; e <= 44; e++)
+        for (let f = e + 1; f <= 45; f++) {
+          if (!passesSixSorted(a, b, c, d, e, f)) continue;
+          const o = n * 6;
+          rows[o] = a; rows[o + 1] = b; rows[o + 2] = c; rows[o + 3] = d; rows[o + 4] = e; rows[o + 5] = f;
+          n++;
+        }
+  return n;
+}
+
+/** 동기 버전 (테스트·워커용). 메인 스레드 UI 에서는 buildFilteredPoolAsync 를 쓰세요. */
+export function buildFilteredPool(): CombinationPool {
+  const rows = new Uint8Array(POOL_MAX_ROWS * 6);
+  let n = 0;
+  for (let a = 1; a <= 40; a++)
+    for (let b = a + 1; b <= 41; b++) n = appendPoolRange(rows, n, a, b);
+  return { rows: rows.subarray(0, n * 6), count: n };
+}
+
+/** 비동기 버전: (a,b) 단위로 작업하다 약 25ms 마다 이벤트 루프에 양보해 화면이 멈추지 않게 합니다. */
+export async function buildFilteredPoolAsync(onProgress?: (ratio: number) => void): Promise<CombinationPool> {
+  const rows = new Uint8Array(POOL_MAX_ROWS * 6);
+  let n = 0;
+  let last = Date.now();
+  for (let a = 1; a <= 40; a++) {
+    for (let b = a + 1; b <= 41; b++) {
+      n = appendPoolRange(rows, n, a, b);
+      if (Date.now() - last > 25) {
+        onProgress?.(a / 40);
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        last = Date.now();
+      }
+    }
+  }
+  onProgress?.(1);
+  return { rows: rows.subarray(0, n * 6), count: n };
+}
+
+let poolScoreBuffer: Float64Array | null = null;
+const POOL_TOP_RATIO = 0.05;
+const POOL_HIST_BINS = 65536;
+
+export interface PoolTopInfo {
+  /** 점수 버퍼(모듈 공유, 다음 호출 때 덮어씀). 부적격 조합은 -Infinity */
+  scores: Float64Array;
+  eligible: number;          // 점수 계산 대상(고정 번호 포함 조건 충족) 조합 수
+  k: number;                 // 상위 풀 크기 = max(1, floor(eligible × 5%))
+  cutScore: number;          // 상위 풀의 마지막(k번째) 조합의 점수
+  cutIndex: number;          // 그 조합의 풀 내 인덱스 (동점이면 인덱스가 작은 쪽이 상위 — 기존 stable sort 와 동일)
+}
+
+/** 인덱스 i 가 상위 풀 소속인지 판정 (점수 내림차순, 동점은 인덱스 오름차순으로 k개). */
+export function isInPoolTop(info: PoolTopInfo, i: number): boolean {
+  const s = info.scores[i];
+  return s > info.cutScore || (s === info.cutScore && i <= info.cutIndex);
+}
+
+/**
+ * 풀 전체를 번호 가중치로 점수화하고 상위 5 % 경계를 정확히 구합니다.
+ * 기존(number[][] → filter → map → 전체 sort → slice) 과 같은 집합을 O(n) 으로 계산합니다:
+ *   score = w[a]+w[b]+…+w[f] (왼쪽부터 더함 → 기존 reduce 와 동일한 부동소수 결과),
+ *   히스토그램으로 경계 구간을 찾고 그 구간만 정렬.
+ */
+export function computePoolTop(pool: CombinationPool, weights: number[], fixedNumbers: number[] = []): PoolTopInfo | null {
+  const { rows, count } = pool;
+  if (count === 0) return null;
+  const W = new Float64Array(46);
+  for (let i = 1; i <= 45; i++) W[i] = weights[i - 1] ?? 0;
+
+  const fixedList = Array.from(new Set(fixedNumbers));
+  if (fixedList.some(n => !(n >= 1 && n <= 45))) return null;      // 기존: 포함 조합 없음 → 경로 B
+  const F = new Uint8Array(46);
+  fixedList.forEach(n => { F[n] = 1; });
+  const fixedCount = fixedList.length;
+
+  if (!poolScoreBuffer || poolScoreBuffer.length < count) poolScoreBuffer = new Float64Array(count);
+  const scores = poolScoreBuffer;
+
+  let eligible = 0, min = Infinity, max = -Infinity;
+  for (let i = 0, o = 0; i < count; i++, o += 6) {
+    const a = rows[o], b = rows[o + 1], c = rows[o + 2], d = rows[o + 3], e = rows[o + 4], f = rows[o + 5];
+    if (fixedCount > 0 && F[a] + F[b] + F[c] + F[d] + F[e] + F[f] !== fixedCount) { scores[i] = -Infinity; continue; }
+    const s = W[a] + W[b] + W[c] + W[d] + W[e] + W[f];
+    if (!Number.isFinite(s)) { scores[i] = -Infinity; continue; }
+    scores[i] = s;
+    eligible++;
+    if (s < min) min = s;
+    if (s > max) max = s;
+  }
+  if (eligible === 0) return null;
+
+  const k = Math.max(1, Math.floor(eligible * POOL_TOP_RATIO));
+  const width = max > min ? (max - min) / POOL_HIST_BINS : 1;
+  const binOf = (s: number) => Math.min(POOL_HIST_BINS - 1, Math.floor((s - min) / width));
+
+  const hist = new Int32Array(POOL_HIST_BINS);
+  for (let i = 0; i < count; i++) { const s = scores[i]; if (s !== -Infinity) hist[binOf(s)]++; }
+
+  let above = 0, tb = POOL_HIST_BINS - 1;
+  for (; tb >= 0; tb--) {
+    if (above + hist[tb] >= k) break;
+    above += hist[tb];
+  }
+  const need = k - above;                       // 경계 구간에서 상위로 뽑을 개수 (1 이상)
+  const cand = new Int32Array(hist[tb]);
+  let m = 0;
+  for (let i = 0; i < count; i++) { const s = scores[i]; if (s !== -Infinity && binOf(s) === tb) cand[m++] = i; }
+  cand.sort((x, y) => (scores[y] - scores[x]) || (x - y));
+  const cutIndex = cand[need - 1];
+  return { scores, eligible, k, cutScore: scores[cutIndex], cutIndex };
+}
+
+/**
+ * 풀의 상위 5 % 중 하나를 균등 무작위로 선택합니다 (기존 경로 A 와 같은 분포).
+ * @param rand 테스트용 난수 주입 (기본 Math.random)
+ */
+export function selectFromPool(
+  pool: CombinationPool, weights: number[], fixedNumbers: number[] = [], rand: () => number = Math.random
+): { combo: number[]; k: number; eligible: number } | null {
+  const info = computePoolTop(pool, weights, fixedNumbers);
+  if (!info) return null;
+  const target = Math.min(info.k - 1, Math.floor(rand() * info.k));
+  let seen = 0;
+  for (let i = 0; i < pool.count; i++) {
+    if (!isInPoolTop(info, i)) continue;
+    if (seen === target) {
+      const o = i * 6;
+      return { combo: Array.from(pool.rows.subarray(o, o + 6)), k: info.k, eligible: info.eligible };
+    }
+    seen++;
+  }
+  return null;
 }
 
 // ==========================================
@@ -1999,7 +2286,7 @@ export async function backtestStrategies(
 // ==========================================
 export function generateQuantumFlux(
   results: LottoResult[],
-  githubCombinations: number[][] = [],
+  githubCombinations: number[][] | CombinationPool = [],   // 필터 통과 풀(권장) 또는 기존 number[][] 목록(하위 호환)
   opts?: OptimizedWeights,
   fixedNumbers: number[] = []   // 반드시 포함할 번호 (최대 5개)
 ): PredictionResult {
@@ -2057,10 +2344,22 @@ export function generateQuantumFlux(
   ];
   const optimizedTag = opts ? ['[최적화 가중치 적용]'] : [];
 
-  // 경로 A: GitHub 조합 가중 스코어링
-  if (githubCombinations.length > 0) {
+  // 경로 A-1: 필터 통과 풀(로컬 전수 열거, 6,657,176개) 가중 스코어링
+  //   풀은 필터를 이미 통과한 조합만 담고 있으므로 재필터가 필요 없고, 상위 5 % 경계는 O(n) 으로 계산합니다.
+  const legacyList: number[][] = Array.isArray(githubCombinations) ? githubCombinations : [];
+  if (!Array.isArray(githubCombinations) && githubCombinations.count > 0) {
     const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts, technicalScores);
-    const scored = githubCombinations
+    const picked = selectFromPool(githubCombinations, weights, fixedNumbers);
+    if (picked) {
+      const reason = buildSelectionReason(picked.combo, pareto, goldenCandidates, whitson);
+      return buildPredictionResult(picked.combo, 96, ['필터 통과 조합 풀 가중 스코어링', ...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS], reason);
+    }
+  }
+
+  // 경로 A-2: (하위 호환) number[][] 조합 목록 가중 스코어링
+  if (legacyList.length > 0) {
+    const weights = buildCombinedWeights(stats, goldenCandidates, pareto, opts, technicalScores);
+    const scored = legacyList
       .filter(combo => {
         // 고정 번호가 있을 경우 해당 번호를 모두 포함하는 조합만 허용
         if (fixedNumbers.length > 0 && !fixedNumbers.every(n => combo.includes(n))) return false;
