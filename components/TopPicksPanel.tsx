@@ -7,7 +7,7 @@ import {
   GapDetail,
   SecondOpinion,
 } from '../services/lottoService';
-import { EvidenceReport, Verdict } from '../services/evidence';
+import { CalibrationBand, EvidenceReport, StackAccuracy, Verdict } from '../services/evidence';
 import { INDICATOR_LABELS, TIER_LABEL, TREND_STYLE, TREND_HINT, heatClass } from './styles';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -117,7 +117,7 @@ const EvidenceBanner: React.FC<{ report: EvidenceReport | null; progress: number
               <span className="text-gray-500 whitespace-nowrap"> (무작위 {report.expectedHits.toFixed(2)}개 ±{report.seHits.toFixed(2)})</span></li>
           </ul>
           <div className="text-[10px] text-gray-500 mt-1.5 leading-relaxed">
-            최근 {report.tests}회({report.firstTestRound}~{report.lastTestRound}회) 워크포워드 — 각 회차를 그 이전 데이터만으로 점수화해 비교 ·
+            {report.tests}회({report.firstTestRound}~{report.lastTestRound}회, 학습 {report.minTrain}회 이후 가능한 모든 시점) 워크포워드 — 각 회차를 그 이전 데이터만으로 점수화해 비교 ·
             z {report.primary.z.toFixed(2)} · p {report.primary.p.toFixed(3)} · 점수 {report.scorers.length}개 다중검정 보정(α={report.alphaBonferroni.toFixed(4)}) 후 유의 {sigCount}개
           </div>
           <div className="text-[10px] text-gray-400 mt-1.5 leading-relaxed">
@@ -161,10 +161,173 @@ const EvidenceBanner: React.FC<{ report: EvidenceReport | null; progress: number
           </table>
           <div className="text-[10px] text-gray-500 mt-1.5 leading-relaxed">
             기준선(장기 빈도·무작위)이 같은 표에서 비슷한 값을 내는지 보세요 — 무작위 기준선도 ±{(report.seRank * 1.96).toFixed(2)}위 범위에서 흔들립니다.
-            번호 1~45 균등성 χ²(44)={report.uniformity.chi2.toFixed(1)} (p={report.uniformity.p.toFixed(2)}, {report.uniformity.draws}회): 특정 번호가 더 잘 나온다는 근거는 없습니다.
+            번호 1~45 균등성 χ²(44)={report.uniformity.chi2.toFixed(1)} (p={report.uniformity.p.toFixed(2)}, {report.uniformity.draws}회): 특정 번호가 더 잘 나온다는 근거는 없습니다. 자세한 검증은 아래 ‘세컨드 오피니언’의 정확도 검토를 보세요.
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// ── ④-2 예측 정확도 검토 (두 스택 각각) ──────────────────────────────────────────
+const VERDICT_CHIP: Record<Verdict, string> = {
+  none: 'text-gray-200 bg-gray-800 border-gray-600',
+  weak: 'text-yellow-200 bg-yellow-900/30 border-yellow-700/50',
+  edge: 'text-emerald-200 bg-emerald-900/30 border-emerald-700/50',
+  worse: 'text-red-200 bg-red-900/30 border-red-700/50',
+};
+
+const pct1 = (p: number) => `${(p * 100).toFixed(1)}%`;
+
+/** 적중 개수 분포: 관측(막대) vs 무작위 기대(점선) */
+const HitBars: React.FC<{ st: StackAccuracy; tests: number; expected: number[] }> = ({ st, tests, expected }) => {
+  const bins: Array<{ label: string; obs: number; exp: number }> = [
+    { label: '0개', obs: st.hist[0] / tests, exp: expected[0] },
+    { label: '1개', obs: st.hist[1] / tests, exp: expected[1] },
+    { label: '2개', obs: st.hist[2] / tests, exp: expected[2] },
+    { label: '3개+', obs: st.hist.slice(3).reduce((a, b) => a + b, 0) / tests, exp: expected.slice(3).reduce((a, b) => a + b, 0) },
+  ];
+  const max = Math.max(...bins.flatMap(b => [b.obs, b.exp]), 0.01);
+  return (
+    <div role="img" aria-label={`적중 개수 분포: ${bins.map(b => `${b.label} ${pct1(b.obs)}(기대 ${pct1(b.exp)})`).join(', ')}`}>
+      <div className="grid grid-cols-4 gap-2">
+        {bins.map(b => (
+          <div key={b.label} className="min-w-0">
+            <div className="relative h-12 border-b border-gray-700">
+              <div className="absolute bottom-0 inset-x-1 rounded-t bg-indigo-400/80" style={{ height: `${Math.max(2, (b.obs / max) * 100)}%` }} />
+              <div className="absolute inset-x-0 border-t-2 border-dashed border-gray-300" style={{ bottom: `${(b.exp / max) * 100}%` }} />
+            </div>
+            <div className="mt-1 text-center leading-tight">
+              <div className="text-[10px] text-gray-300 whitespace-nowrap">{b.label}</div>
+              <div className="text-[11px] font-bold text-white whitespace-nowrap">{pct1(b.obs)}</div>
+              <div className="text-[9px] text-gray-500 whitespace-nowrap">기대 {pct1(b.exp)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/** 순위 구간별 실제 출현율(95% 구간) vs 기준 13.33% */
+const CalibRow: React.FC<{ b: CalibrationBand }> = ({ b }) => {
+  const x = (v: number) => `${Math.min(100, Math.max(0, (v / 0.2) * 100))}%`;
+  const covers = b.lo <= 6 / 45 && 6 / 45 <= b.hi;
+  return (
+    <div className="grid grid-cols-[3.6rem_1fr] gap-x-2 items-center">
+      <span className="text-[10px] text-gray-400 whitespace-nowrap">{b.label}</span>
+      <div className="min-w-0">
+        <div className="text-[10px] whitespace-nowrap">
+          <b className="text-white">{pct1(b.rate)}</b>
+          <span className="text-gray-500"> [{(b.lo * 100).toFixed(1)}~{(b.hi * 100).toFixed(1)}]</span>
+          <span className={covers ? 'text-gray-500' : 'text-amber-300'}> {covers ? '· 13.3% 포함' : '· 13.3% 밖'}</span>
+        </div>
+        <div className="relative h-2.5 mt-0.5">
+          <div className="absolute inset-x-0 top-1/2 border-t border-gray-700" />
+          <div className="absolute top-0 bottom-0 border-l border-dashed border-gray-400" style={{ left: x(6 / 45) }} />
+          <div className="absolute top-1/2 h-[3px] -translate-y-1/2 rounded bg-indigo-400/70" style={{ left: x(b.lo), width: `calc(${x(b.hi)} - ${x(b.lo)})` }} />
+          <div className="absolute top-1/2 w-2 h-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-indigo-100" style={{ left: x(b.rate) }} />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AccuracyReview: React.FC<{ ev: EvidenceReport }> = ({ ev }) => {
+  const [fu, un] = ev.stacks;
+  const exp3 = ev.hitsExpected.slice(3).reduce((a, b) => a + b, 0);
+  const exp4 = ev.hitsExpected.slice(4).reduce((a, b) => a + b, 0);
+  const deltas = ev.stacks.map(st => st.scorer.meanHits - ev.expectedHits);
+  const maxDelta = Math.max(...deltas.map(Math.abs));
+  const rnd = ev.randomness;
+  return (
+    <div className="mt-4 pt-4 border-t border-indigo-800/40">
+      <div className="text-[11px] sm:text-xs font-bold text-indigo-300">🎯 예측 정확도 검토</div>
+      <div className="text-[10px] text-indigo-200/70 mt-0.5 leading-relaxed">
+        <span className="whitespace-nowrap">매 회차를 그 이전 데이터만으로 예측해 실제 결과와 비교</span>{' '}
+        <span className="whitespace-nowrap">· {ev.tests}회 (제 {ev.firstTestRound}~{ev.lastTestRound}회)</span>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+        {ev.stacks.map(st => (
+          <div key={st.key} className="rounded-lg border border-indigo-800/40 bg-indigo-950/40 p-3 min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+              <span className="text-[11px] font-bold text-gray-200 whitespace-nowrap">{st.label}</span>
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${VERDICT_CHIP[st.verdict]}`}>{st.verdictLabel}</span>
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <div className="min-w-0">
+                <div className="text-[10px] text-gray-500">평균 적중</div>
+                <div className="text-sm font-black text-white whitespace-nowrap">{st.scorer.meanHits.toFixed(2)}개</div>
+                <div className="text-[10px] text-gray-500 whitespace-nowrap">무작위 {ev.expectedHits.toFixed(2)}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] text-gray-500">3개 이상</div>
+                <div className="text-sm font-black text-white whitespace-nowrap">{pct1(st.hit3Rate)}</div>
+                <div className="text-[10px] text-gray-500 whitespace-nowrap">무작위 {pct1(exp3)}</div>
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] text-gray-500">당첨 평균 순위</div>
+                <div className="text-sm font-black text-white whitespace-nowrap">{st.scorer.meanRank.toFixed(1)}위</div>
+                <div className="text-[10px] text-gray-500 whitespace-nowrap">무작위 {ev.expectedRank.toFixed(1)}</div>
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="text-[10px] text-gray-400 mb-1.5">
+                <span className="whitespace-nowrap">Top6 적중 개수 분포</span>{' '}
+                <span className="text-gray-600 whitespace-nowrap">(점선 = 무작위 기대)</span>
+              </div>
+              <HitBars st={st} tests={ev.tests} expected={ev.hitsExpected} />
+            </div>
+            <div className="mt-2 text-[10px] text-gray-500 leading-relaxed">
+              z <span className="whitespace-nowrap">{st.scorer.z.toFixed(2)}</span> · 순위 검정 p <span className="whitespace-nowrap">{st.scorer.p.toFixed(2)}</span> · 분포 일치 p <span className="whitespace-nowrap">{st.histP.toFixed(2)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <ul className="mt-3 space-y-1.5 text-[11px] text-gray-300 leading-relaxed">
+        <li className="flex gap-2"><span className="text-indigo-300 flex-shrink-0">•</span>
+          <span><b className="text-white">어떤 6개를 골라도 같은 분포</b>입니다: 0개 {pct1(ev.hitsExpected[0])} · 1개 {pct1(ev.hitsExpected[1])} · 2개 {pct1(ev.hitsExpected[2])} · 3개 {pct1(ev.hitsExpected[3])} · 4개 이상 {pct1(exp4)}. 두 스택의 관측 분포는 이 기대와 구분되지 않습니다.</span></li>
+        <li className="flex gap-2"><span className="text-indigo-300 flex-shrink-0">•</span>
+          <span>이 표본({ev.tests}회)으로 가려낼 수 있는 최소 우위는 <b className="text-white whitespace-nowrap">적중 +{ev.mde.hits.toFixed(2)}개 (+{ev.mde.hitsPct.toFixed(0)}%)</b>입니다.
+            관측된 차이(최대 {maxDelta.toFixed(2)}개)는 이보다 {maxDelta < ev.mde.hits ? '작아 우연과 구분되지 않고' : '크지만 보정 검정을 함께 보세요'}, +5%를 가려내려면 약 {ev.mde.testsFor5pct.toLocaleString()}회가 필요해 지금 데이터로는 불가능합니다.</span></li>
+        {rnd && (
+          <li className="flex gap-2"><span className="text-indigo-300 flex-shrink-0">•</span>
+            <span>추첨이 독립·균등인지 <b className="text-white whitespace-nowrap">{rnd.tests.length}개 검정 중 기각 {rnd.rejected}개</b> (보정 α={rnd.alpha.toFixed(3)}) — 점수가 맞힐 수 있는 ‘구조’가 {rnd.draws}회 데이터에서 발견되지 않았습니다.</span></li>
+        )}
+      </ul>
+
+      <details className="mt-3 text-[10px] text-gray-500">
+        <summary className="cursor-pointer text-indigo-300 font-bold">구간별 실제 출현율(보정)과 무작위성 검정 자세히</summary>
+        <div className="mt-2 text-gray-400 leading-relaxed">
+          순위 구간에 속한 번호가 다음 회차 본번호에 실제로 포함된 비율입니다. 점수가 쓸모 있다면 ‘상위 6’이 기준선(점선, 6/45=13.3%)보다 높고 ‘25~45위’가 낮아야 합니다.
+        </div>
+        <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+          {[fu, un].map(st => (
+            <div key={st.key} className="rounded-lg border border-gray-700/60 bg-gray-900/40 p-3 space-y-2">
+              <div className="text-[10px] font-bold text-gray-300">{st.label}</div>
+              {st.calibration.map(b => <CalibRow key={b.label} b={b} />)}
+            </div>
+          ))}
+        </div>
+        {rnd && (
+          <div className="mt-3 rounded-lg border border-gray-700/60 bg-gray-900/40 p-3">
+            <div className="text-[10px] font-bold text-gray-300 mb-1.5">추첨 무작위성 검정 {rnd.tests.length}개 <span className="font-normal text-gray-500">(기각 기준 p&lt;{rnd.alpha.toFixed(3)}, 보정 없이 p&lt;0.05: {rnd.uncorrectedHits}개 — 검정이 10개면 우연히 0.5개는 기대)</span></div>
+            <ul className="space-y-1">
+              {rnd.tests.map(t => (
+                <li key={t.key} className="py-1 border-b border-gray-800/70 last:border-b-0">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0">
+                    <span className="text-gray-200 font-bold whitespace-nowrap">{t.name}</span>
+                    <span className="whitespace-nowrap"><span className="text-gray-500">{t.stat} · </span><b className={t.rejected ? 'text-amber-300' : 'text-gray-200'}>p {t.p.toFixed(2)}</b></span>
+                  </div>
+                  <div className="text-gray-500 leading-snug">{t.detail.replace(/\s(?=\S+$)/, '\u00A0')}</div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </details>
     </div>
   );
 };
@@ -233,8 +396,9 @@ const StackCompare: React.FC<{
         )}
       </div>
       <div className="text-[10px] text-gray-500 mt-2 leading-relaxed break-keep">
-        두 스택은 모두 ‘공백·평균회귀’ 계열이라 평균적으로 {ov ? ov.mean.toFixed(1) : '2~3'}개가 겹칩니다 — 일치가 많다고 선택이 더 맞는다는 뜻은 아니며, 적중률 우위를 의미하지 않습니다.
+        두 스택은 코드는 별개지만 같은 과거 데이터를 보고 비슷한 ‘공백·평균회귀’ 철학을 따라 평균 {ov ? ov.mean.toFixed(1) : '2~3'}개가 겹칩니다(무작위 0.8개) — 두 스택이 일치해도 독립적인 확인이 아니며, 적중률 우위를 의미하지 않습니다.
       </div>
+      {evidence && <AccuracyReview ev={evidence} />}
     </div>
   );
 };

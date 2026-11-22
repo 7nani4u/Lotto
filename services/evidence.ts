@@ -6,8 +6,17 @@ import {
   FLOW_WEIGHT_DEFAULT,
   FLOW_TREND_SCORES,
   seededRandom,
+  tieKey,
 } from './lottoService';
 import { unifiedQuantumEngine645 } from './formulas/index';
+import { comb } from './drawReport';
+import {
+  chiSquareSurvival,
+  normalTwoSided,
+  runRandomnessBattery,
+  RandomnessReport,
+  wilsonInterval,
+} from './randomness';
 
 // ==========================================
 // EVIDENCE — 번호 순위 점수의 "워크포워드" 검증 (화면에 근거 없는 확신을 표시하지 않기 위한 기준선)
@@ -15,10 +24,14 @@ import { unifiedQuantumEngine645 } from './formulas/index';
 //
 // 각 시점 t 에서 "t 이전 회차만" 으로 점수를 만들고, 실제 t 회차 본번호 6개와 비교합니다.
 // 무작위(독립·균등)라면 기대값은 정해져 있습니다:
-//   · 상위 6개 적중 기대 6×6/45 = 0.800개
+//   · 상위 6개 적중 기대 6×6/45 = 0.800개, 적중 개수 분포는 초기하분포(0개 40.1 % · 1개 42.4 % · 2개 15.1 % · 3개+ 2.4 %)
 //   · 당첨 6개의 평균 순위 기대 23.0 (1=최고점) — 표준편차는 해석식 √((45²−1)/12/6 × 39/44) ≈ 4.99
+//   · 어떤 순위 구간이든 그 구간 번호가 실제로 나올 비율은 6/45 = 13.33 %
 // 평균 순위는 상위 6개 적중보다 정보량이 커서 같은 표본에서 훨씬 작은 차이를 구분합니다.
-// 결과 해석: 유의한 우위가 없으면 점수는 "순위 지표"일 뿐 출현 확률이 아닙니다.
+//
+// [수정] 검증 구간을 "최근 400회"로 고정하면 창을 어떻게 잡느냐에 따라 결론이 달라졌습니다
+// (400회: z=−2.09 "약한 신호" → 가능한 모든 시점 689회: z=−1.38 "구분 안 됨"). 학습 최소 회차만 정하고
+// 그 뒤 모든 시점을 검증에 쓰도록 바꿨습니다(표본↑ → 표준오차 0.25→0.19위).
 // ==========================================
 
 export type ScorerKind = 'system' | 'sub' | 'flow' | 'baseline';
@@ -32,6 +45,7 @@ export interface ScorerEvidence {
   z: number;             // (meanRank − 23) / SE  — 음수일수록 당첨번호를 위에 둠
   p: number;             // 양측 p-value (정규 근사)
   blocks: number[];      // 시간순 3등분 구간별 평균 순위 (같은 방향이 반복되는지 확인)
+  hist: number[];        // 상위 6개 적중 개수 0~6 의 시점 수
 }
 
 export interface RetroPick {
@@ -47,6 +61,29 @@ export interface RetroPick {
 }
 
 export type Verdict = 'none' | 'weak' | 'edge' | 'worse';
+
+export interface CalibrationBand {
+  label: string;         // '상위 6' 등
+  picks: number;         // 구간에 속한 (번호×시점) 수
+  hits: number;          // 그중 실제로 본번호에 포함된 수
+  rate: number;          // hits / picks
+  lo: number;            // Wilson 95 % 하한
+  hi: number;            // Wilson 95 % 상한
+}
+
+/** 두 스택(융합 · 독립 스택) 각각의 정확도 상세 */
+export interface StackAccuracy {
+  key: 'fused' | 'unified';
+  label: string;
+  scorer: ScorerEvidence;
+  verdict: Verdict;
+  verdictLabel: string;
+  hit3Rate: number;            // Top6 에서 3개 이상 맞힌 시점 비율
+  hist: number[];              // 적중 0~6 개 시점 수
+  histChi2: number;            // 관측 vs 초기하 기대 (0 · 1 · 2 · 3+ 4구간)
+  histP: number;
+  calibration: CalibrationBand[];
+}
 
 export interface EvidenceReport {
   tests: number;
@@ -66,33 +103,24 @@ export interface EvidenceReport {
   overlap: { mean: number; random: number; distribution: number[]; tests: number };
   recent: RetroPick[];           // 최신 → 과거, 최대 10회
   uniformity: { chi2: number; df: number; p: number; draws: number };
+  hitsExpected: number[];        // 무작위 적중 개수 0~6 의 확률 (초기하분포)
+  stacks: StackAccuracy[];       // [융합, 독립 스택]
+  /** 이 시험 크기로 구분할 수 있는 최소 개선 (유의수준 5 %, 검정력 80 %) */
+  mde: { hits: number; hitsPct: number; rank: number; testsFor5pct: number; testsFor10pct: number };
+  randomness: RandomnessReport | null;
 }
 
 const HITS_RANDOM = 0.8;
 const RANK_RANDOM = 23;
 const SD_RANK = Math.sqrt(((45 * 45 - 1) / 12) / 6 * (39 / 44));   // ≈ 4.99
 const SD_HITS = Math.sqrt(6 * (6 / 45) * (39 / 45) * (39 / 44));   // ≈ 0.784 (초기하분포)
+const TOTAL = 8145060;
+const HITS_EXPECTED = [0, 1, 2, 3, 4, 5, 6].map(k => comb(6, k) * comb(39, 6 - k) / TOTAL);
 
-function erfc(x: number): number {
-  // Abramowitz–Stegun 7.1.26 (최대 오차 1.5e-7)
-  const t = 1 / (1 + 0.3275911 * Math.abs(x));
-  const y = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
-  return x >= 0 ? y : 2 - y;
-}
-const normalTwoSided = (z: number) => erfc(Math.abs(z) / Math.SQRT2);
-
-function chiSquareSurvival(chi2: number, df: number): number {
-  // Wilson–Hilferty 근사: df 가 크면(44) 충분히 정확
-  const c = Math.cbrt(chi2 / df);
-  const mu = 1 - 2 / (9 * df);
-  const sd = Math.sqrt(2 / (9 * df));
-  return 0.5 * erfc(((c - mu) / sd) / Math.SQRT2);
-}
-
-function topSix(score: number[]): number[] {
+/** 점수 내림차순 번호 목록 — 동점은 번호 크기와 무관한 결정적 키로 해소 */
+function orderOf(score: number[], seed: number): number[] {
   return Array.from({ length: 45 }, (_, i) => i + 1)
-    .sort((a, b) => score[b] - score[a] || a - b)
-    .slice(0, 6);
+    .sort((a, b) => score[b] - score[a] || tieKey(seed, a) - tieKey(seed, b));
 }
 
 function ranksOf(score: number[]): number[] {
@@ -107,6 +135,20 @@ function ranksOf(score: number[]): number[] {
     i = j + 1;
   }
   return rank;
+}
+
+function verdictOf(z: number): { verdict: Verdict; label: string } {
+  let verdict: Verdict = 'none';
+  if (z <= -3) verdict = 'edge';
+  else if (z <= -1.96) verdict = 'weak';
+  else if (z >= 1.96) verdict = 'worse';
+  const label = {
+    none: '무작위와 구분되지 않음',
+    weak: '약한 신호 (우위로 단정 불가)',
+    edge: '무작위보다 유의하게 우수',
+    worse: '무작위보다 오히려 불리',
+  }[verdict];
+  return { verdict, label };
 }
 
 const SCORER_META: Array<{ key: string; label: string; kind: ScorerKind }> = [
@@ -128,8 +170,10 @@ const SCORER_META: Array<{ key: string; label: string; kind: ScorerKind }> = [
   { key: 'random', label: '기준선: 무작위', kind: 'baseline' },
 ];
 
+const CALIB_GROUPS: Array<[string, number, number]> = [['상위 6', 0, 6], ['7~12위', 6, 12], ['13~24위', 12, 24], ['25~45위', 24, 45]];
+
 export interface EvidenceOptions {
-  testRounds?: number;    // 기본 400
+  testRounds?: number;    // 검증할 최대 시점 수 (기본: 학습 최소 회차 이후 모든 시점)
   minTrain?: number;      // 기본 300
   onProgress?: (ratio: number) => void;
   isCancelled?: () => boolean;   // true 를 돌려주면 즉시 중단(null 반환) — 데이터가 바뀌어 결과가 무의미할 때
@@ -145,16 +189,20 @@ export async function buildEvidenceReport(
 ): Promise<EvidenceReport | null> {
   const minTrain = opts.minTrain ?? 300;
   const chrono = [...results].sort((a, b) => a.round - b.round);   // 오래된 → 최신
-  const tests = Math.min(opts.testRounds ?? 400, chrono.length - minTrain);
+  const tests = Math.min(opts.testRounds ?? Infinity, chrono.length - minTrain);
   if (tests < 60) return null;
   const start = chrono.length - tests;
   const yieldEvery = opts.yieldEvery ?? 12;
   const rand = seededRandom(20261122);
 
-  const acc: Record<string, { hits: number[]; ranks: number[] }> = {};
-  SCORER_META.forEach(m => { acc[m.key] = { hits: [], ranks: [] }; });
+  const acc: Record<string, { hits: number[]; ranks: number[]; hist: number[] }> = {};
+  SCORER_META.forEach(m => { acc[m.key] = { hits: [], ranks: [], hist: new Array<number>(7).fill(0) }; });
   const overlapDist = new Array<number>(7).fill(0);
   const recent: RetroPick[] = [];
+  const calib: Record<'fused' | 'unified', { picks: number[]; hits: number[] }> = {
+    fused: { picks: CALIB_GROUPS.map(() => 0), hits: CALIB_GROUPS.map(() => 0) },
+    unified: { picks: CALIB_GROUPS.map(() => 0), hits: CALIB_GROUPS.map(() => 0) },
+  };
 
   const toVec = (f: (n: number) => number): number[] => {
     const v = new Array<number>(46).fill(0);
@@ -164,12 +212,13 @@ export async function buildEvidenceReport(
 
   for (let t = start; t < chrono.length; t++) {
     const train = chrono.slice(0, t).reverse();           // 최신이 앞
+    const seed = train[0].round;                          // 화면과 같은 동점 해소 시드(최신 회차 번호)
     const target = chrono[t];
     const actual = target.numbers;
     const table = buildFullAnalysisTable(train);
     const flow = buildFlowSignals(train);
     if (table.length === 0 || !flow) continue;
-    const fused = buildFusedTable(table, flow, FLOW_WEIGHT_DEFAULT);
+    const fused = buildFusedTable(table, flow, FLOW_WEIGHT_DEFAULT, null, seed);
     const fusedMap = new Map(fused.map(r => [r.number, r.fusedScore]));
     const uni = unifiedQuantumEngine645.predict(train).scores;
     const uniVec = new Array<number>(46).fill(0);
@@ -199,16 +248,30 @@ export async function buildEvidenceReport(
       random: toVec(() => rand()),
     };
 
+    const orders: Record<string, number[]> = {};
     for (const m of SCORER_META) {
       const v = vectors[m.key];
       const rk = ranksOf(v);
-      const top = topSix(v);
-      acc[m.key].hits.push(top.filter(n => actual.includes(n)).length);
+      const order = orderOf(v, seed);
+      orders[m.key] = order;
+      const h = order.slice(0, 6).filter(n => actual.includes(n)).length;
+      acc[m.key].hits.push(h);
+      acc[m.key].hist[h]++;
       acc[m.key].ranks.push(actual.reduce((s, n) => s + rk[n], 0) / 6);
     }
 
-    const fusedTop = fused.slice(0, 6).map(r => r.number);
-    const uniTop = topSix(uniVec);
+    // 순위 구간별 실제 출현율 (보정 확인) — 두 스택만
+    (['fused', 'unified'] as const).forEach(key => {
+      CALIB_GROUPS.forEach(([, lo, hi], gi) => {
+        for (let k = lo; k < hi; k++) {
+          calib[key].picks[gi]++;
+          if (actual.includes(orders[key][k])) calib[key].hits[gi]++;
+        }
+      });
+    });
+
+    const fusedTop = orders.fused.slice(0, 6);
+    const uniTop = orders.unified.slice(0, 6);
     overlapDist[fusedTop.filter(n => uniTop.includes(n)).length]++;
 
     if (t >= chrono.length - 10) {
@@ -247,26 +310,41 @@ export async function buildEvidenceReport(
       key: m.key, label: m.label, kind: m.kind,
       meanHits: mean(a.hits), meanRank, z, p: normalTwoSided(z),
       blocks: [0, 1, 2].map(b => mean(a.ranks.slice(b * blockSize, (b + 1) * blockSize))),
+      hist: a.hist,
     };
   });
   const primary = scorers.find(s => s.key === 'fused')!;
   const alphaBonferroni = 0.05 / scorers.length;
-
-  let verdict: Verdict = 'none';
-  if (primary.z <= -3) verdict = 'edge';
-  else if (primary.z <= -1.96) verdict = 'weak';
-  else if (primary.z >= 1.96) verdict = 'worse';
-  const verdictLabel = {
-    none: '무작위와 구분되지 않음',
-    weak: '약한 신호 (우위로 단정 불가)',
-    edge: '무작위보다 유의하게 우수',
-    worse: '무작위보다 오히려 불리',
-  }[verdict];
+  const { verdict, label: verdictLabel } = verdictOf(primary.z);
   const effectText =
     `당첨 번호 6개를 평균 ${primary.meanRank.toFixed(1)}위에 배치 (무작위 기대 ${RANK_RANDOM.toFixed(1)}위, ±${seRank.toFixed(2)}) · ` +
     `Top6 평균 적중 ${primary.meanHits.toFixed(2)}개 (무작위 ${HITS_RANDOM.toFixed(2)}개, ±${seHits.toFixed(2)})`;
 
-  // 번호 균등성 (H0 가정 점검): 본번호 출현 횟수의 χ² 적합도
+  // 두 스택 상세 — 적중 분포 vs 초기하, 구간별 보정
+  const stacks: StackAccuracy[] = (['fused', 'unified'] as const).map(key => {
+    const sc = scorers.find(s => s.key === key)!;
+    const bins = [[0], [1], [2], [3, 4, 5, 6]];
+    let chi2 = 0;
+    bins.forEach(b => {
+      const o = b.reduce((s, k) => s + sc.hist[k], 0);
+      const e = n * b.reduce((s, k) => s + HITS_EXPECTED[k], 0);
+      chi2 += (o - e) ** 2 / e;
+    });
+    const v = verdictOf(sc.z);
+    return {
+      key, label: key === 'fused' ? '융합 Top6' : '독립 스택 Top6', scorer: sc,
+      verdict: v.verdict, verdictLabel: v.label,
+      hit3Rate: sc.hist.slice(3).reduce((a, b) => a + b, 0) / n,
+      hist: sc.hist, histChi2: chi2, histP: chiSquareSurvival(chi2, 3),
+      calibration: CALIB_GROUPS.map(([label], gi) => {
+        const picks = calib[key].picks[gi], hits = calib[key].hits[gi];
+        const [lo, hi] = wilsonInterval(hits, picks);
+        return { label, picks, hits, rate: picks > 0 ? hits / picks : 0, lo, hi };
+      }),
+    };
+  });
+
+  // 번호 1~45 균등성 (H0 가정 점검): 본번호 출현 횟수의 χ² 적합도
   const freq = new Array<number>(46).fill(0);
   chrono.forEach(d => d.numbers.forEach(x => { freq[x]++; }));
   const expected = (chrono.length * 6) / 45;
@@ -278,6 +356,7 @@ export async function buildEvidenceReport(
     ? overlapDist.reduce((s, c, k) => s + c * k, 0) / overlapTotal
     : 0;
 
+  const mdeHits = 2.8 * SD_HITS / Math.sqrt(n);
   return {
     tests: n, minTrain,
     firstTestRound: chrono[start].round, lastTestRound: chrono[chrono.length - 1].round,
@@ -286,5 +365,13 @@ export async function buildEvidenceReport(
     overlap: { mean: overlapMean, random: 0.8, distribution: overlapDist, tests: overlapTotal },
     recent: recent.reverse(),
     uniformity: { chi2, df: 44, p: chiSquareSurvival(chi2, 44), draws: chrono.length },
+    hitsExpected: HITS_EXPECTED,
+    stacks,
+    mde: {
+      hits: mdeHits, hitsPct: (mdeHits / HITS_RANDOM) * 100, rank: 2.8 * SD_RANK / Math.sqrt(n),
+      testsFor5pct: Math.ceil((2.8 * SD_HITS / (0.05 * HITS_RANDOM)) ** 2),
+      testsFor10pct: Math.ceil((2.8 * SD_HITS / (0.10 * HITS_RANDOM)) ** 2),
+    },
+    randomness: runRandomnessBattery(chrono),
   };
 }

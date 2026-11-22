@@ -1,3 +1,4 @@
+// @ts-nocheck — 작업 전 백업(참조·audit/verify_filters_ts.mjs 용). 현재 타입(PredictionResult 등)과 맞지 않아 타입 검사에서 제외합니다.
 import { LottoResult, PredictionResult, SelectionReason } from '../types';
 
 // ==========================================

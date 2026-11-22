@@ -1,4 +1,4 @@
-import { LottoResult, PredictionResult, SelectionReason } from '../types';
+import { LottoResult, PredictionResult, PredictionSource, SelectionReason } from '../types';
 
 // ==========================================
 // 1. DATA FETCHING
@@ -121,19 +121,28 @@ export interface CoOccurrenceEntry {
 
 export interface RepeatAnalysis {
   targetNumber: number;
-  totalOccurrences: number;
+  windowRounds: number;          // totalOccurrences·recent*·repeat*·averageGap 을 센 최근 회차 수 (lookbackRounds, 예: 100)
+  totalOccurrences: number;      // 최근 windowRounds 회차 안의 출현 횟수 (본번호+보너스) — 전체 기간이 아님
+  allTimeOccurrences: number;    // 전체 데이터에서의 출현 횟수 (본번호+보너스)
+  allTimeRounds: number;         // 전체 회차 수
   recent10Occurrences: number;
   recent30Occurrences: number;
   repeatAfterOne: number;
   repeatAfterTwo: number;
-  repeatPercentage: number;
+  repeatPercentage: number;      // 출현한 회차 중 직전 회차에도 나왔던 비율 (분모 = 직전 회차를 볼 수 있는 출현 수)
   averageGap: number;
   gapTrend: 'INCREASING' | 'DECREASING' | 'STABLE';
   lastSeenRound: number;
   roundsSinceLastSeen: number;
-  confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW';
-  insight: string;
-  recommendation: string;
+  /**
+   * [삭제] confidenceLevel(HIGH/MEDIUM/LOW)·recommendation. 예전 문구는 "통계적 회귀에 의해 조만간 출현할 확률이 매우 높습니다"처럼
+   * 근거 없는 예측이었습니다(오래 쉰 번호가 더 잘 나온다는 근거 없음 — 장기 대기 검증·출현 간격 검정 p=0.66). 이제는 관찰한 값과
+   * "균등 추첨이면 이럴 확률"만 서술합니다.
+   */
+  insight: string;               // 관찰 제목 (가장 드문 관찰, 없으면 "무작위 기대 범위")
+  observation: string;           // 측정값 + 균등 추첨 기준 확률
+  notable: boolean;              // 균등 추첨에서 5 % 미만으로 드문 관찰이 있는가 (3개 후보 중 최소값 — 우연히도 흔함)
+  coOccurrenceExpected: { mean: number; sd: number };   // 동반 출현 횟수의 무작위 기대(평균·표준편차)
   zScore: number;
   // 기술 지표 원시값 (분석 UI 표시용)
   maSignal: number;        // 단기MA − 장기MA: 음수 = 최근 빈도 감소(회귀 기대)
@@ -154,10 +163,12 @@ export interface RepeatAnalysis {
 export function analyzeRepeatProbability(results: LottoResult[], targetNumber: number, lookbackRounds = 100): RepeatAnalysis {
   if (!results || results.length === 0) {
     return {
-      targetNumber, totalOccurrences: 0, recent10Occurrences: 0, recent30Occurrences: 0,
+      targetNumber, windowRounds: 0, totalOccurrences: 0, allTimeOccurrences: 0, allTimeRounds: 0,
+      recent10Occurrences: 0, recent30Occurrences: 0,
       repeatAfterOne: 0, repeatAfterTwo: 0, repeatPercentage: 0, averageGap: 0,
       gapTrend: 'STABLE', lastSeenRound: 0, roundsSinceLastSeen: 0,
-      confidenceLevel: 'LOW', insight: '데이터 부족', recommendation: '데이터 부족',
+      insight: '데이터 부족', observation: '데이터 부족', notable: false,
+      coOccurrenceExpected: { mean: 0, sd: 0 },
       zScore: 0,
       maSignal: 0, rsi: 50, bollingerPctB: 0.5, aroonOscillator: 0, techScore: 50,
       maScore: 0, rsiScore: 0, bbScore: 0, aroonScore: 0, signalScore: 0,
@@ -168,6 +179,7 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
   const latestRound = results[0].round;
   let totalOccurrences = 0, recent10Occurrences = 0, recent30Occurrences = 0;
   let repeatAfterOne = 0, repeatAfterTwo = 0;
+  let repeatEligible = 0;     // 직전 회차(더 최근 회차)를 볼 수 있는 출현 수 — 가장 최신 회차의 출현은 직전 회차가 없어 제외
   const gaps: number[] = [];
   let lastSeenIdx = -1;
 
@@ -179,12 +191,14 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
       if (i < 30) recent30Occurrences++;
       if (lastSeenIdx !== -1) gaps.push(i - lastSeenIdx);
       lastSeenIdx = i;
+      if (i > 0) repeatEligible++;
       if (i > 0 && (results[i-1].numbers.includes(targetNumber) || results[i-1].bonus === targetNumber)) repeatAfterOne++;
       if (i > 1 && (results[i-2].numbers.includes(targetNumber) || results[i-2].bonus === targetNumber)) repeatAfterTwo++;
     }
   }
 
-  const repeatPercentage = totalOccurrences > 0 ? (repeatAfterOne / (totalOccurrences - 1)) * 100 : 0;
+  // [수정] 분모가 (출현 수 − 1) 고정이라, 최신 회차에 안 나온 번호(대부분)는 분모가 1 작아 비율이 부풀었고 출현 1회면 0/0 = NaN 이었음
+  const repeatPercentage = repeatEligible > 0 ? (repeatAfterOne / repeatEligible) * 100 : 0;
   const averageGap = gaps.length > 0 ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0;
   let gapTrend: 'INCREASING' | 'DECREASING' | 'STABLE' = 'STABLE';
   if (gaps.length >= 3) {
@@ -196,29 +210,53 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
   const lastSeenRound = lastSeenRoundMatch ? lastSeenRoundMatch.round : 0;
   const roundsSinceLastSeen = lastSeenRoundMatch ? latestRound - lastSeenRound : checkRounds;
 
-  let confidenceLevel: 'HIGH' | 'MEDIUM' | 'LOW' = 'LOW';
-  let insight = '', recommendation = '';
-
-  if (roundsSinceLastSeen > 15) {
-    insight = '장기 미출현 번호'; confidenceLevel = 'HIGH';
-    recommendation = `현재 ${roundsSinceLastSeen}회차 연속 미출현 상태로, 통계적 회귀에 의해 조만간 출현할 확률이 매우 높습니다.`;
-  } else if (recent10Occurrences >= 3) {
-    insight = '최근 급증 번호'; confidenceLevel = 'HIGH';
-    recommendation = `최근 10회차 동안 ${recent10Occurrences}회나 집중적으로 출현하는 강한 상승세를 보이고 있습니다.`;
-  } else if (repeatPercentage > 15) {
-    insight = '강한 연속성 보유'; confidenceLevel = 'MEDIUM';
-    recommendation = `이월(연속) 출현 확률이 ${repeatPercentage.toFixed(1)}%로 높은 편입니다.`;
-  } else if (gapTrend === 'DECREASING') {
-    insight = '출현 주기 단축 중'; confidenceLevel = 'MEDIUM';
-    recommendation = `평균 출현 간격(${averageGap.toFixed(1)}회)보다 최근 출현 주기가 짧아지며 상승 곡선을 타고 있습니다.`;
-  } else {
-    insight = '평범한 출현 흐름'; confidenceLevel = 'LOW';
-    recommendation = `특이한 쏠림이나 급증 패턴 없이 평균적인 흐름(${averageGap.toFixed(1)}회 간격)을 유지하고 있습니다.`;
+  // ── 관찰 요약 ───────────────────────────────────────────────────────────────
+  // 세 가지 관찰(연속 미출현 · 최근 10회 출현 · 직전 회차 직후 재출현)을 각각 "균등 추첨이면 이럴 확률"로 환산해
+  // 가장 드문 것을 서술합니다. 한 회차에 번호 하나가 나올 확률(본번호 6 + 보너스 1 → 이 분석의 '출현' 정의) = 7/45.
+  // 확률이 5 % 미만이면 notable. 후보가 3개라 우연히도 자주 나오므로 "근거"가 아니라 "관찰"로만 표시합니다.
+  const P7 = 7 / 45;
+  const fmtP = (p: number) => (p < 0.001 ? '0.1% 미만' : `${(p * 100).toFixed(p < 0.1 ? 1 : 0)}%`);
+  const binomTailGE = (n: number, k: number, p: number): number => {
+    if (k <= 0) return 1;
+    if (k > n) return 0;
+    let pmf = Math.pow(1 - p, n), sum = 0;
+    for (let i = 0; i <= n; i++) {
+      if (i >= k) sum += pmf;
+      pmf *= ((n - i) / (i + 1)) * (p / (1 - p));
+    }
+    return Math.min(1, sum);
+  };
+  const candidates: Array<{ p: number; insight: string; text: string }> = [];
+  if (roundsSinceLastSeen >= 1) {
+    const p = Math.pow(1 - P7, roundsSinceLastSeen);
+    candidates.push({
+      p, insight: '긴 미출현',
+      text: totalOccurrences === 0
+        ? `최근 ${checkRounds}회차 동안 한 번도 나오지 않았습니다. 균등 추첨에서 이럴 확률은 ${fmtP(p)}입니다.`
+        : `${roundsSinceLastSeen}회차 연속 미출현 중입니다. 균등 추첨에서 이렇게 오래 안 나올 확률은 ${fmtP(p)}입니다.`,
+    });
   }
-  if (totalOccurrences === 0) {
-    insight = '완전 미출현';
-    recommendation = `최근 ${checkRounds}회차 동안 단 한 번도 출현하지 않은 극단적 콜드 번호입니다.`;
+  if (recent10Occurrences >= 2) {
+    const p = binomTailGE(10, recent10Occurrences, P7);
+    candidates.push({
+      p, insight: '최근 자주 출현',
+      text: `최근 10회차 중 ${recent10Occurrences}회 출현했습니다 (균등 기대 ${(10 * P7).toFixed(1)}회). 균등 추첨에서 이 이상일 확률은 ${fmtP(p)}입니다.`,
+    });
   }
+  if (repeatEligible >= 5 && repeatAfterOne / repeatEligible > P7) {
+    const p = binomTailGE(repeatEligible, repeatAfterOne, P7);
+    candidates.push({
+      p, insight: '이월 출현이 잦음',
+      text: `출현한 ${repeatEligible}번 중 ${repeatAfterOne}번은 직전 회차에도 나온 직후였습니다 (${((repeatAfterOne / repeatEligible) * 100).toFixed(1)}%, 균등 기대 ${(P7 * 100).toFixed(1)}%). 균등 추첨에서 이 이상일 확률은 ${fmtP(p)}입니다.`,
+    });
+  }
+  candidates.sort((x, y) => x.p - y.p);
+  const top = candidates[0];
+  const notable = !!top && top.p < 0.05;
+  const insight = notable ? top.insight : '무작위 기대 범위';
+  const observation = notable
+    ? top.text
+    : `최근 ${checkRounds}회차 출현 ${totalOccurrences}회 (균등 기대 ${(checkRounds * P7).toFixed(1)}회) · 평균 출현 간격 ${averageGap.toFixed(1)}회 (균등 기대 ${(1 / P7).toFixed(1)}회). 균등 추첨에서 흔히 나오는 범위이며 눈에 띄게 드문 패턴은 없습니다.`;
 
   // ── Z-Score: 전체 데이터 기준 출현 빈도 통계 ──────────────────────────────
   const allFrequencies: Record<number, number> = {};
@@ -254,6 +292,15 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
   // 가중 합산 신호 점수 (MA 20% + RSI 30% + BB 35% + Aroon 15%)
   const signalScore = techEntry?.signalScore ?? 0;
 
+  // 전체 기간 출현 횟수와 동반 출현의 무작위 기대
+  //   대상 번호가 나온 회차(7개 중)에서 다른 번호 하나가 함께 나올 확률 = 6/44 → 기대 N×6/44, 표준편차 √(N·p·(1−p))
+  const allTimeOccurrences = allFrequencies[targetNumber];
+  const coP = 6 / 44;
+  const coOccurrenceExpected = {
+    mean: allTimeOccurrences * coP,
+    sd: Math.sqrt(allTimeOccurrences * coP * (1 - coP)),
+  };
+
   // 동반 출현 번호 Top 10: 전체 데이터 기준
   const coOccurrenceMap: Record<number, number> = {};
   for (let i = 1; i <= 45; i++) if (i !== targetNumber) coOccurrenceMap[i] = 0;
@@ -271,9 +318,10 @@ export function analyzeRepeatProbability(results: LottoResult[], targetNumber: n
     .slice(0, 10);
 
   return {
-    targetNumber, totalOccurrences, recent10Occurrences, recent30Occurrences,
+    targetNumber, windowRounds: checkRounds, totalOccurrences, allTimeOccurrences, allTimeRounds: results.length,
+    recent10Occurrences, recent30Occurrences,
     repeatAfterOne, repeatAfterTwo, repeatPercentage, averageGap, gapTrend,
-    lastSeenRound, roundsSinceLastSeen, confidenceLevel, insight, recommendation,
+    lastSeenRound, roundsSinceLastSeen, insight, observation, notable, coOccurrenceExpected,
     zScore, maSignal, rsi, bollingerPctB, aroonOscillator, techScore,
     maScore, rsiScore, bbScore, aroonScore, signalScore,
     coOccurrenceTop10,
@@ -1439,7 +1487,8 @@ export function classifyRecentlyBack(results: LottoResult[]): number[] {
   return back;
 }
 
-import { unifiedQuantumEngine645 } from './formulas/index';
+import { unifiedQuantumEngine645, tieKey } from './formulas/index';
+export { tieKey };
 
 export type TierKey = 'pick' | 'next' | 'avoid' | 'mid';
 
@@ -1456,8 +1505,8 @@ export interface SecondOpinion {
  *
  * [도입 이유] formulas/는 라이브와 같은 6/45 예측 스택이었으나 어디에서도
  * 호출되지 않는 데드코드였습니다. 삭제 대신 융합 Top6와의 일치도를 공개합니다.
- * [해석 주의] 두 스택은 모두 "공백·평균회귀" 계열이라 서로 상관이 큽니다. 실측 989회차 최근 200시점에서
- * 평균 일치는 2.37개(무작위 기대 0.80개)였으므로 "2개 일치"는 평균 이하입니다. 일치 개수는 반드시
+ * [해석 주의] 두 스택은 모두 "공백·평균회귀" 계열이라 서로 상관이 큽니다. 실측 989회차 모든 검증 시점에서
+ * 평균 일치는 2.53개(가능한 모든 시점 689회, 무작위 기대 0.80개)였으므로 "2개 일치"는 평균 이하입니다. 일치 개수는 반드시
  * 이 기준선(evidence.overlapMean)과 함께 읽어야 하며, 어느 쪽도 적중률 우위를 뜻하지 않습니다.
  * 30회차 미만이면 QA 가드가 0점을 반환해 [1..6] 퇴화가 나오므로 null.
  */
@@ -1473,7 +1522,7 @@ export function secondOpinion645(
     : (results.length >= 10 ? buildFullAnalysisTable(results) : []);
   if (t.length === 0) return null;
   const f = flow ?? buildFlowSignals(results);
-  const fusedTop6 = buildFusedTable(t, f, flowWeight)
+  const fusedTop6 = buildFusedTable(t, f, flowWeight, null, results[0]?.round ?? 0)
     .slice(0, 6).map(r => r.number).sort((a, b) => a - b);
   const numbers = unifiedQuantumEngine645.predict(results).numbers;
   const shared = numbers.filter(n => fusedTop6.includes(n)).sort((a, b) => a - b);
@@ -1506,15 +1555,17 @@ export function buildFusedTable(
   flow: FlowSignals | null,
   flowWeight: number = FLOW_WEIGHT_DEFAULT,
   stability: Record<number, number> | null = null,
+  tieSeed: number = 0,        // 동점 해소 시드(보통 최신 회차 번호) — 같은 입력이면 같은 결과, 번호 크기와는 무관
 ): FusedRow[] {
   const w = Math.max(0, Math.min(1, flowWeight));
+  const tie = (a: number, b: number) => tieKey(tieSeed, a) - tieKey(tieSeed, b);
   const byNum = new Map(table.map(t => [t.number, t]));
   // [수정] 합의 = "서브점수 ≥ 65" 였으나 RSI 서브점수(100−RSI)가 구조적으로 높아
   // (실측 989회차: 최소 58.3 · 중앙 83.3 · 75 %가 ≥65) 합의 수가 RSI 하나로 부풀려졌음.
   // 절대 기준 대신 각 서브점수 안에서의 순위(상위 12위)로 판정해 지표 간 척도 차이를 제거.
   const subKeys = ['zSubScore', 'bbSubScore', 'rsiSubScore', 'maSubScore', 'aroonSubScore'] as const;
   const topSets = subKeys.map(key =>
-    new Set([...table].sort((a, b) => b[key] - a[key] || a.number - b.number)
+    new Set([...table].sort((a, b) => b[key] - a[key] || tie(a.number, b.number))
       .slice(0, AGREEMENT_TOP_N).map(t => t.number)),
   );
   const rows: FusedRow[] = [];
@@ -1534,7 +1585,7 @@ export function buildFusedTable(
       contested: false,
     });
   }
-  rows.sort((a, b) => b.fusedScore - a.fusedScore || a.number - b.number);
+  rows.sort((a, b) => b.fusedScore - a.fusedScore || tie(a.number, b.number));
   rows.forEach((r, i) => {
     r.fusedRank = i + 1;
     r.tier = r.fusedRank <= 6 ? 'pick' : r.fusedRank <= 12 ? 'next' : r.fusedRank > 39 ? 'avoid' : 'mid';
@@ -1582,7 +1633,7 @@ export function computeStability(
     }
     const sub = order.slice(0, m).sort((a, b) => a - b).map(i => results[i]);
     if (sub.length < 10) continue;
-    const fused = buildFusedTable(buildFullAnalysisTable(sub), buildFlowSignals(sub), flowWeight);
+    const fused = buildFusedTable(buildFullAnalysisTable(sub), buildFlowSignals(sub), flowWeight, null, results[0]?.round ?? 0);
     fused.slice(0, topk).forEach(r => { counts[r.number]++; });
   }
   const out = {} as Record<number, number>;
@@ -1811,11 +1862,11 @@ const PYTHON_FILTER_FORMULAS = [
   `총합(${ADVANCED_SUM_MIN}~${ADVANCED_SUM_MAX})`, '번대별 분산',
 ];
 
-function buildPredictionResult(numbers: number[], confidence: number, formulasUsed: string[], selectionReason?: SelectionReason): PredictionResult {
+function buildPredictionResult(numbers: number[], source: PredictionSource, formulasUsed: string[], selectionReason?: SelectionReason): PredictionResult {
   const sum = numbers.reduce((a, b) => a + b, 0);
   let odd = 0, even = 0, high = 0, low = 0;
   numbers.forEach(n => { if (n % 2 !== 0) odd++; else even++; if (n > 22) high++; else low++; });
-  return { numbers, confidence, formulasUsed: Array.from(new Set(formulasUsed)), selectionReason, stats: { sum, oddEvenRatio: `${odd}:${even}`, highLowRatio: `${high}:${low}` } };
+  return { numbers, source, passesFilters: passesPythonFilters(numbers), formulasUsed: Array.from(new Set(formulasUsed)), selectionReason, stats: { sum, oddEvenRatio: `${odd}:${even}`, highLowRatio: `${high}:${low}` } };
 }
 
 /**
@@ -2088,6 +2139,10 @@ export function selectFromPool(
 // 10. BACKTESTING ENGINE (최근 1년 전략 비교)
 // ==========================================
 /**
+ * @deprecated 앱 시작 시 자동 실행하던 "최근 52회 최적 설정 선택"입니다. 같은 52회에서 4개 설정 중 최선을 고르고 그 성과를
+ * "향상"으로 표기하는 구조라 선택 자체가 잡음입니다(audit/ENGINE_UPGRADE_REPORT.md §8: 선택 구간 3개+ 일치 3.8 % → 다음 52회 3.4 %,
+ * 평균 적중 0.793개 · 기대 0.800개, 52회 표준오차 ±2.1%p). 앱은 더 이상 호출하지 않고 검증 스크립트(audit/accuracy_audit.mjs)용으로만 export 합니다.
+ *
  * 무작위 6/45 기준선: P(3+일치) = [C(6,3)×C(39,3) + C(6,4)×C(39,2) + ...] / C(45,6)
  * = (182780 + 11115 + 234 + 1) / 8145060 ≈ 2.38%
  *
@@ -2352,7 +2407,7 @@ export function generateQuantumFlux(
     const picked = selectFromPool(githubCombinations, weights, fixedNumbers);
     if (picked) {
       const reason = buildSelectionReason(picked.combo, pareto, goldenCandidates, whitson);
-      return buildPredictionResult(picked.combo, 96, ['필터 통과 조합 풀 가중 스코어링', ...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS], reason);
+      return buildPredictionResult(picked.combo, 'pool', ['필터 통과 조합 풀 가중 스코어링', ...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS], reason);
     }
   }
 
@@ -2372,7 +2427,7 @@ export function generateQuantumFlux(
       const topPool = scored.slice(0, Math.max(1, Math.floor(scored.length * 0.05)));
       const selected = topPool[Math.floor(Math.random() * topPool.length)];
       const reason = buildSelectionReason(selected.combo, pareto, goldenCandidates, whitson);
-      return buildPredictionResult(selected.combo, 96, ['GitHub 조합 가중 스코어링', ...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS], reason);
+      return buildPredictionResult(selected.combo, 'list', ['GitHub 조합 가중 스코어링', ...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS], reason);
     }
   }
 
@@ -2442,17 +2497,17 @@ export function generateQuantumFlux(
 
     if (passesPythonFilters(candidates) && whitsonOk) {
       const reason = buildSelectionReason(candidates, pareto, goldenCandidates, whitson);
-      return buildPredictionResult(candidates, opts ? 92 : 88, [...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS], reason);
+      return buildPredictionResult(candidates, 'direct', [...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS], reason);
     }
     if (attempts < 500 && passesPythonFilters(candidates)) {
       const reason = buildSelectionReason(candidates, pareto, goldenCandidates, whitson);
-      return buildPredictionResult(candidates, opts ? 82 : 78, [...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS, 'Whitson 조건 완화'], reason);
+      return buildPredictionResult(candidates, 'relaxed', [...methodLabels, ...optimizedTag, ...PYTHON_FILTER_FORMULAS, 'Whitson 조건 완화'], reason);
     }
     attempts--;
   }
 
   const fallback = generateFallbackNumbers();
-  return buildPredictionResult(fallback, 55, ['기본 랜덤 대체', ...PYTHON_FILTER_FORMULAS], {
+  return buildPredictionResult(fallback, 'fallback', ['기본 랜덤 대체', ...PYTHON_FILTER_FORMULAS], {
     stage1_modelDesign: '6종 통합 모델 (폴백)',
     stage2_calcLogic: '필터 통과 실패 → 기본 랜덤 대체',
     stage3_setReason: `합계 ${fallback.reduce((a, b) => a + b, 0)} | 최적화 실패`,
@@ -2463,6 +2518,9 @@ export function generateQuantumFlux(
 // 12. QUANTUM PARAMETER OPTIMIZATION ENGINE
 // ==========================================
 /**
+ * @deprecated 앱 시작 시 자동 실행하던 qNoise·σ 그리드 탐색(최근 52회)입니다. 실측 결과가 qNoise=0·σ=0("노이즈 없음")으로 나와 자동 적용되던
+ * 잡음 선택이었고, 어떤 값이든 장당 1등 확률(1/8,145,060)은 같습니다. 앱은 더 이상 호출하지 않습니다(기본값 qNoise 0.12 · σ 1).
+ *
  * Box-Muller 양자 요동의 두 핵심 파라미터를 최근 1년 데이터로 그리드 탐색합니다.
  *
  * [파라미터 1] qNoise (가중치 교란 진폭)

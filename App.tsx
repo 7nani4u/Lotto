@@ -6,8 +6,6 @@ import {
   fetchLottoData,
   generateQuantumFlux,
   buildFilteredPoolAsync,
-  backtestStrategies,
-  optimizeQuantumParameters,
   buildFullAnalysisTable,
   buildFlowSignals,
   buildFusedTable,
@@ -19,25 +17,31 @@ import {
   FLOW_WEIGHT_DEFAULT,
   LottoStats,
   RepeatAnalysis,
-  StrategyAnalysis,
-  QuantumOptimizationResult,
-  OptimizedWeights,
   FullIndicatorAnalysis,
   FusedRow,
   CombinationPool,
 } from './services/lottoService';
-import { LottoResult, PredictionResult } from './types';
+import { LottoResult, PredictionResult, PredictionSource } from './types';
 import { Ball } from './components/Ball';
 import { TopPicksPanel } from './components/TopPicksPanel';
 import { FlowPanel } from './components/FlowPanel';
 import { RecentDrawStrip, RecentDrawsSummary } from './components/RecentDrawStrip';
 import { DrawReport } from './components/DrawReport';
 import { buildHistoryProfile } from './services/drawReport';
-import { summarizeDraw } from './services/drawMeta';
+import { FILTER_SPACE_PASS, summarizeDraw } from './services/drawMeta';
 import { buildEvidenceReport, EvidenceReport } from './services/evidence';
 
 const GENERATED_HISTORY_KEY = 'lottoQuantumGeneratedHistoryV1';
 const MAX_FIXED_NUMBERS = 5;
+
+// 조합이 만들어진 경로 (서비스가 실제로 사용한 경로를 그대로 표시 — 고정 '신뢰도' 숫자는 삭제)
+const SOURCE_LABEL: Record<PredictionSource, string> = {
+  pool: '필터 통과 풀 상위 5% 중 무작위',
+  list: '조합 목록 상위 5% 중 무작위',
+  direct: '가중 무작위 생성 후 필터 검사',
+  relaxed: '가중 무작위 (Whitson 조건 완화)',
+  fallback: '필터 실패 → 순수 무작위 대체',
+};
 
 const App: React.FC = () => {
   const [allData, setAllData] = useState<LottoResult[]>([]);
@@ -51,16 +55,10 @@ const App: React.FC = () => {
   const [repeatAnalysis, setRepeatAnalysis] = useState<RepeatAnalysis | null>(null);
   // 필터 통과 조합 풀 (로컬 전수 열거). 준비되기 전에는 null → 경로 B(직접 생성)로 동작
   const [combinationPool, setCombinationPool] = useState<CombinationPool | null>(null);
-  const [strategyAnalysis, setStrategyAnalysis] = useState<StrategyAnalysis | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [quantumOptResult, setQuantumOptResult] = useState<QuantumOptimizationResult | null>(null);
-  const [isOptimizingQuantum, setIsOptimizingQuantum] = useState(false);
+  const [poolReady, setPoolReady] = useState(false);   // 풀 생성이 끝났는가(성공·실패 모두) — 끝나기 전에는 '엔진 준비 중'
   const [isGeneratingQuantum, setIsGeneratingQuantum] = useState(false);
-  const [quantumApplied, setQuantumApplied] = useState(false);
   const analysisReportRef = useRef<HTMLDivElement>(null);
-  const strategyReportRef = useRef<HTMLDivElement>(null);
   const [expandedDrawRound, setExpandedDrawRound] = useState<number | null>(null);
-  const autoInitStartedRef = useRef(false);
   const generatedHistoryRef = useRef<Set<string>>(new Set());
   const [generationStatus, setGenerationStatus] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState(false);
@@ -92,7 +90,8 @@ const App: React.FC = () => {
       // 필터 통과 조합 풀을 로컬에서 비동기 생성 (네트워크 파일 불필요, 약 1초, UI 양보하며 진행)
       buildFilteredPoolAsync()
         .then(pool => setCombinationPool(pool))
-        .catch(error => console.error('조합 풀 생성 오류:', error));
+        .catch(error => console.error('조합 풀 생성 오류:', error))
+        .finally(() => setPoolReady(true));
 
       const data = await fetchLottoData((nextProgress, round) => {
         setProgress(nextProgress);
@@ -108,22 +107,11 @@ const App: React.FC = () => {
     void loadData();
   }, []);
 
-  useEffect(() => {
-    if (!quantumOptResult) return;
-    setQuantumApplied(true);
-  }, [quantumOptResult]);
-
   // reportOpen 이 true 로 바뀐 뒤 React 가 DOM 을 commit 한 다음 스크롤.
   // setTimeout(0) 은 브라우저 paint 한 프레임 뒤 실행을 보장해 ref 가 항상 유효.
   useEffect(() => {
     // 이제 인라인으로 표시되므로 별도의 스크롤 효과는 필요하지 않습니다.
   }, [expandedDrawRound]);
-
-  useEffect(() => {
-    if (allData.length === 0 || autoInitStartedRef.current) return;
-    autoInitStartedRef.current = true;
-    void Promise.allSettled([handleRunAnalysis(), handleQuantumOptimize()]);
-  }, [allData]);
 
   const chartData = useMemo(() => {
     if (!stats) return [];
@@ -178,23 +166,6 @@ const App: React.FC = () => {
     return nextPredictions;
   };
 
-  // 양자 최적화 결과와 전략 분석 결과를 병합한 최종 가중치 계산
-  const mergedWeights = useMemo((): OptimizedWeights | undefined => {
-    const base = strategyAnalysis?.optimizedWeights;
-    if (!quantumOptResult || !quantumApplied) return base;
-    return {
-      ...base,
-      gaussianFactor: base?.gaussianFactor ?? 1.0,
-      fibonacciFactor: base?.fibonacciFactor ?? 1.4,
-      goldenRatioFactor: base?.goldenRatioFactor ?? 1.6,
-      pythagoreanFactor: base?.pythagoreanFactor ?? 0.4,
-      paretoTier1Factor: base?.paretoTier1Factor ?? 2.5,
-      quantumNoiseFactor: quantumOptResult.optimalQNoise,
-      quantumSigma: quantumOptResult.optimalSigma,
-      whitsonFilterEnabled: base?.whitsonFilterEnabled ?? true,
-    };
-  }, [strategyAnalysis, quantumOptResult, quantumApplied]);
-
   // ── 번호 흐름 분석: 추세·갭·구간·대기 + 연결강도·융합 (allData 변경 시 재계산)
   // 정의 단일화: 추세/갭/복귀/구간 판정은 services/lottoService.ts §4.7
   // (Python lotto_technical_indicators.py와 동일 임계값). 기존 인라인 계산은
@@ -241,7 +212,7 @@ const App: React.FC = () => {
   );
   const fusedTable: FusedRow[] = useMemo(
     () => (indicatorTable.length > 0
-      ? buildFusedTable(indicatorTable, flowSignals, FLOW_WEIGHT_DEFAULT, stabilityMap)
+      ? buildFusedTable(indicatorTable, flowSignals, FLOW_WEIGHT_DEFAULT, stabilityMap, allData[0]?.round ?? 0)
       : []),
     [indicatorTable, flowSignals, stabilityMap],
   );
@@ -259,8 +230,7 @@ const App: React.FC = () => {
     setEvidence(null);
     setEvidenceProgress(0);
     buildEvidenceReport(allData, {
-      testRounds: 400,
-      minTrain: 300,
+      minTrain: 300,                       // 학습 최소 300회 이후 가능한 모든 시점을 검증 (창 크기에 따라 결론이 달라지는 일 방지)
       isCancelled: () => cancelled,
       onProgress: ratio => { if (!cancelled) setEvidenceProgress(ratio); },
     })
@@ -302,7 +272,7 @@ const App: React.FC = () => {
     });
 
     const nextPredictions = generateUniquePredictionSet(
-      () => generateQuantumFlux(allData, combinationPool ?? [], mergedWeights, fixedNumbers),
+      () => generateQuantumFlux(allData, combinationPool ?? [], undefined, fixedNumbers),
       combinationCount
     );
 
@@ -322,32 +292,6 @@ const App: React.FC = () => {
 
     setGenerationStatus(null);
     setIsGeneratingQuantum(false);
-  };
-
-  const handleQuantumOptimize = async () => {
-    if (allData.length === 0) return;
-    setIsOptimizingQuantum(true);
-    try {
-      const result = await optimizeQuantumParameters(allData, 52, 30);
-      setQuantumOptResult(result);
-      setQuantumApplied(false); // 새 결과는 적용 전 상태로
-    } catch (e) {
-      console.error('양자 최적화 오류:', e);
-    }
-    setIsOptimizingQuantum(false);
-  };
-
-  const handleRunAnalysis = async () => {
-    if (allData.length === 0) return;
-    setIsAnalyzing(true);
-    try {
-      const result = await backtestStrategies(allData, 52, 25);
-      setStrategyAnalysis(result);
-      setTimeout(() => { strategyReportRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 200);
-    } catch (e) {
-      console.error('백테스트 오류:', e);
-    }
-    setIsAnalyzing(false);
   };
 
   // -------------------------------------------------------
@@ -423,7 +367,7 @@ const App: React.FC = () => {
   const fixedNumbersRemaining = MAX_FIXED_NUMBERS - fixedNumbers.length;
   const fixedNumberLimitReached = fixedNumbersRemaining === 0;
   const hasPredictionResults = quantumPredictions.length > 0;
-  const isEngineBusy = isAnalyzing || isOptimizingQuantum;
+  const isEngineBusy = !poolReady;
   const isGenerateDisabled = isEngineBusy || isGeneratingQuantum;
   const normalizedFixedInput = fixedInput.trim();
   const canSubmitFixedNumber = normalizedFixedInput !== '' && !fixedNumberLimitReached;
@@ -639,11 +583,18 @@ const App: React.FC = () => {
           )}
 
           {quantumPredictions.length > 0 && (
-            <div className="mt-6 grid w-full grid-cols-1 gap-4 animate-fade-in xl:grid-cols-2">
+            <div className="mt-6 rounded-xl border border-indigo-800/50 bg-indigo-950/30 px-4 py-3 text-xs sm:text-sm leading-relaxed text-indigo-100 break-keep">
+              <b className="text-white">모든 조합의 1등 당첨 확률은 1/8,145,060으로 같습니다.</b>{' '}
+              필터 5종을 통과하는 조합은 전체의 {(FILTER_SPACE_PASS * 100).toFixed(1)}%이며, 필터와 점수는 후보를 고르는 방식일 뿐 당첨 확률을 높이지 않습니다.
+            </div>
+          )}
+
+          {quantumPredictions.length > 0 && (
+            <div className="mt-4 grid w-full grid-cols-1 gap-4 animate-fade-in xl:grid-cols-2">
               {quantumPredictions.map((prediction, index) => {
                 const fixedInCombo = fixedNumbers.filter(n => prediction.numbers.includes(n));
                 return (
-                  <div key={prediction.numbers.join('-')} className="bg-gray-900/80 rounded-2xl p-6 border border-purple-900/50 shadow-inner">
+                  <div key={prediction.numbers.join('-')} className="bg-gray-900/80 rounded-2xl p-4 sm:p-6 border border-purple-900/50 shadow-inner">
                     <div className="flex items-center justify-between mb-4">
                       <div>
                         <div className="text-sm font-bold text-purple-300">추천 조합 #{index + 1}</div>
@@ -658,26 +609,27 @@ const App: React.FC = () => {
                     <div className="flex flex-nowrap justify-center gap-2 sm:gap-3 md:gap-4 mb-6">
                       {prediction.numbers.map((num, i) => (
                         <div key={i} className={fixedNumbers.includes(num) ? 'ring-2 ring-amber-400 rounded-full' : ''}>
-                          <Ball num={num} onClick={() => handleBallClick(num)} />
+                          <Ball num={num} responsive onClick={() => handleBallClick(num)} />
                         </div>
                       ))}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 text-sm text-gray-300 border-t border-gray-700/60 pt-6">
-                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
-                        <div className="text-gray-400 mb-2 font-medium">총합</div>
+                    <div className="grid grid-cols-2 gap-3 sm:gap-4 text-sm text-gray-300 border-t border-gray-700/60 pt-5 sm:pt-6">
+                      <div className="bg-gray-800/80 p-3 sm:p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
+                        <div className="text-gray-400 mb-2 font-medium whitespace-nowrap">총합</div>
                         <div className="text-2xl font-black text-white">{prediction.stats.sum}</div>
                       </div>
-                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
-                        <div className="text-gray-400 mb-2 font-medium">AI 신뢰도</div>
-                        <div className="text-2xl font-black text-purple-400">{prediction.confidence}%</div>
+                      <div className="bg-gray-800/80 p-3 sm:p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
+                        <div className="text-gray-400 mb-2 font-medium whitespace-nowrap">필터 5종</div>
+                        <div className={`text-2xl font-black whitespace-nowrap ${prediction.passesFilters ? 'text-emerald-300' : 'text-amber-300'}`}>{prediction.passesFilters ? '✓ 통과' : '✗ 미통과'}</div>
+                        <div className="mt-1 text-[10px] leading-snug text-gray-500 text-center break-keep">{SOURCE_LABEL[prediction.source]}</div>
                       </div>
-                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
-                        <div className="text-gray-400 mb-2 font-medium">홀짝 비율</div>
+                      <div className="bg-gray-800/80 p-3 sm:p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
+                        <div className="text-gray-400 mb-2 font-medium whitespace-nowrap">홀짝 비율</div>
                         <div className="text-2xl font-black text-blue-300">{prediction.stats.oddEvenRatio}</div>
                       </div>
-                      <div className="bg-gray-800/80 p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
-                        <div className="text-gray-400 mb-2 font-medium">고저 비율</div>
+                      <div className="bg-gray-800/80 p-3 sm:p-4 rounded-xl border border-gray-700/60 flex flex-col items-center justify-center">
+                        <div className="text-gray-400 mb-2 font-medium whitespace-nowrap">고저 비율</div>
                         <div className="text-2xl font-black text-purple-300">{prediction.stats.highLowRatio}</div>
                       </div>
                     </div>
@@ -687,8 +639,6 @@ const App: React.FC = () => {
             </div>
           )}
         </div>
-
-        {/* 내부 분석/최적화는 자동 실행되며 화면에는 표시하지 않음 */}
 
         {/* ══ [1] 출현가능성 상위 6개 번호 + 검증 배너 + 세컨드 오피니언 + 전체 테이블 ══ */}
         {indicatorTable.length > 0 && fusedTable.length > 0 && (
@@ -854,63 +804,60 @@ const App: React.FC = () => {
         </div>
 
         {selectedAnalysisNum && repeatAnalysis && (
-          <div ref={analysisReportRef} className="bg-gray-800 rounded-2xl p-6 md:p-8 shadow-xl border border-blue-900/40 mt-8">
+          <div ref={analysisReportRef} className="ko-flow bg-gray-800 rounded-2xl p-4 sm:p-6 md:p-8 shadow-xl border border-blue-900/40 mt-8">
             <h2 className="text-xl sm:text-2xl font-bold mb-6 text-blue-300 flex items-center justify-center md:justify-start gap-2 sm:gap-3 border-b border-gray-700/60 pb-4 break-keep break-words">
               <Ball num={selectedAnalysisNum} small />
-              <span>선택 번호 정밀 분석 리포트</span>
+              <span>
+                <span className="block sm:inline">선택 번호</span>{' '}
+                <span className="block sm:inline">정밀 분석 리포트</span>
+              </span>
             </h2>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="space-y-4 lg:col-span-1">
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
-                  <span className="text-gray-400 font-medium">262회차부터 출현 횟수</span>
-                  <span className="font-bold text-xl text-white">{repeatAnalysis.totalOccurrences}회</span>
+                {/* [정정] 이 값은 "262회차부터"가 아니라 최근 windowRounds(100)회차 안의 출현 횟수입니다 — 전체 기간 횟수는 아래 Z-Score 영역에 표시 */}
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center gap-3">
+                  <span className="text-gray-400 font-medium">최근 {repeatAnalysis.windowRounds}회차 내 출현<span className="block text-[10px] text-gray-600 font-normal">균등 기대 {(repeatAnalysis.windowRounds * 7 / 45).toFixed(1)}회</span></span>
+                  <span className="font-bold text-xl text-white whitespace-nowrap">{repeatAnalysis.totalOccurrences}회</span>
                 </div>
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
-                  <span className="text-gray-400 font-medium">최근 10회차 내 출현</span>
-                  <span className="font-bold text-xl text-white">{repeatAnalysis.recent10Occurrences}회</span>
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center gap-3">
+                  <span className="text-gray-400 font-medium">최근 10회차 내 출현<span className="block text-[10px] text-gray-600 font-normal">균등 기대 {(10 * 7 / 45).toFixed(1)}회</span></span>
+                  <span className="font-bold text-xl text-white whitespace-nowrap">{repeatAnalysis.recent10Occurrences}회</span>
                 </div>
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
-                  <span className="text-gray-400 font-medium">최근 30회차 내 출현</span>
-                  <span className="font-bold text-xl text-white">{repeatAnalysis.recent30Occurrences}회</span>
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center gap-3">
+                  <span className="text-gray-400 font-medium">최근 30회차 내 출현<span className="block text-[10px] text-gray-600 font-normal">균등 기대 {(30 * 7 / 45).toFixed(1)}회</span></span>
+                  <span className="font-bold text-xl text-white whitespace-nowrap">{repeatAnalysis.recent30Occurrences}회</span>
                 </div>
               </div>
 
               <div className="space-y-4 lg:col-span-1">
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
-                  <span className="text-gray-400 font-medium">연속(이월) 출현 횟수</span>
-                  <span className="font-bold text-xl text-white">{repeatAnalysis.repeatAfterOne}회</span>
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center gap-3">
+                  <span className="text-gray-400 font-medium">연속(이월) 출현 횟수<span className="block text-[10px] text-gray-600 font-normal">출현 직전 회차에도 나온 비율 {repeatAnalysis.repeatPercentage.toFixed(1)}% (균등 기대 {(700 / 45).toFixed(1)}%)</span></span>
+                  <span className="font-bold text-xl text-white whitespace-nowrap">{repeatAnalysis.repeatAfterOne}회</span>
                 </div>
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
-                  <span className="text-gray-400 font-medium">평균 출현 간격</span>
-                  <span className="font-bold text-xl text-white">{repeatAnalysis.averageGap.toFixed(1)}회</span>
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center gap-3">
+                  <span className="text-gray-400 font-medium">평균 출현 간격<span className="block text-[10px] text-gray-600 font-normal">균등 기대 {(45 / 7).toFixed(1)}회</span></span>
+                  <span className="font-bold text-xl text-white whitespace-nowrap">{repeatAnalysis.averageGap.toFixed(1)}회</span>
                 </div>
-                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center">
-                  <span className="text-gray-400 font-medium">미출현 기간</span>
-                  <span className={`font-bold text-xl ${repeatAnalysis.roundsSinceLastSeen > 10 ? 'text-red-400' : 'text-white'}`}>
-                    {repeatAnalysis.roundsSinceLastSeen}회차째
-                  </span>
+                <div className="bg-gray-900 p-4 rounded-xl border border-gray-700/60 flex justify-between items-center gap-3">
+                  <span className="text-gray-400 font-medium">미출현 기간<span className="block text-[10px] text-gray-600 font-normal">{repeatAnalysis.averageGap > 0 ? `평균 간격의 ${(repeatAnalysis.roundsSinceLastSeen / repeatAnalysis.averageGap).toFixed(1)}배` : '평균 간격 계산 불가'}</span></span>
+                  <span className="font-bold text-xl text-white whitespace-nowrap">{repeatAnalysis.roundsSinceLastSeen}회차째</span>
                 </div>
               </div>
 
               <div className="bg-gray-900 p-5 rounded-xl border border-blue-900/40 flex flex-col justify-center lg:col-span-1 relative overflow-hidden">
-                <div className="absolute top-0 right-0 p-2 opacity-10 text-6xl">🤖</div>
-                <div className="text-sm text-blue-400 mb-2 font-bold flex items-center gap-2">
-                  <span>AI Insight</span>
-                  <span
-                    className={`px-2 py-0.5 rounded text-xs text-white ${
-                      repeatAnalysis.confidenceLevel === 'HIGH'
-                        ? 'bg-red-500'
-                        : repeatAnalysis.confidenceLevel === 'MEDIUM'
-                          ? 'bg-yellow-500'
-                          : 'bg-gray-500'
-                    }`}
-                  >
+                <div className="text-sm text-blue-400 mb-2 font-bold flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="whitespace-nowrap">관찰 요약</span>
+                  <span className={`px-2 py-0.5 rounded text-xs whitespace-nowrap ${repeatAnalysis.notable ? 'bg-amber-600/80 text-white' : 'bg-gray-700 text-gray-200'}`}>
                     {repeatAnalysis.insight}
                   </span>
                 </div>
-                <p className="text-gray-300 leading-relaxed text-sm md:text-base break-words">{repeatAnalysis.recommendation}</p>
-                <div className="mt-4 pt-3 border-t border-gray-800 text-xs text-gray-500">
+                <p className="text-gray-300 leading-relaxed text-sm md:text-base break-words">{repeatAnalysis.observation}</p>
+                <div className="mt-3 text-[11px] leading-relaxed text-gray-500 break-keep">
+                  지금까지의 모습을 설명할 뿐입니다. 어떤 번호든 다음 회차 본번호에 포함될 확률은 <b className="text-gray-300 whitespace-nowrap">6/45 = 13.3%</b>이며 이 관찰로 달라지지 않습니다.
+                  {repeatAnalysis.notable && ' 세 가지 관찰 중 가장 드문 것을 고르므로 5% 미만도 우연히 자주 나옵니다.'}
+                </div>
+                <div className="mt-3 pt-3 border-t border-gray-800 text-xs text-gray-500">
                   마지막 출현: {repeatAnalysis.lastSeenRound > 0 ? `${repeatAnalysis.lastSeenRound}회차` : '기록 없음'}
                 </div>
               </div>
@@ -919,7 +866,7 @@ const App: React.FC = () => {
             {/* Z-Score 지표 */}
             <div className="mt-6 bg-gray-900 rounded-xl border border-blue-900/40 p-5">
               <h3 className="text-sm font-bold text-blue-400 mb-4 flex items-center gap-2">
-                <span>📊</span> Z-Score 지표 <span className="text-gray-500 font-normal text-xs">(전체 회차 기준 통계적 편차)</span>
+                <span>📊</span> <span className="whitespace-nowrap">Z-Score 지표</span> <span className="text-gray-500 font-normal text-xs whitespace-nowrap">(전체 회차 기준 편차)</span>
               </h3>
               <div className="flex flex-col sm:flex-row items-center gap-6">
                 <div className="flex flex-col items-center justify-center bg-gray-800 rounded-xl p-5 min-w-[120px] border border-gray-700">
@@ -928,24 +875,29 @@ const App: React.FC = () => {
                     {repeatAnalysis.zScore > 0 ? '+' : ''}{repeatAnalysis.zScore.toFixed(2)}
                   </span>
                   <span className={`mt-2 text-xs font-bold px-2 py-0.5 rounded ${repeatAnalysis.zScore > 1 ? 'bg-red-900/50 text-red-300' : repeatAnalysis.zScore < -1 ? 'bg-blue-900/50 text-blue-300' : 'bg-green-900/50 text-green-300'}`}>
-                    {repeatAnalysis.zScore > 1 ? '과출현' : repeatAnalysis.zScore < -1 ? '저출현' : '평균 수준'}
+                    {repeatAnalysis.zScore > 1 ? '많이 나온 편' : repeatAnalysis.zScore < -1 ? '적게 나온 편' : '평균 수준'}
                   </span>
+                  <span className="mt-2 text-[10px] text-gray-500 text-center leading-snug">전체 {repeatAnalysis.allTimeRounds}회차 중 <span className="whitespace-nowrap">{repeatAnalysis.allTimeOccurrences}회</span><br />(균등 기대 <span className="whitespace-nowrap">{(repeatAnalysis.allTimeRounds * 7 / 45).toFixed(0)}회</span>)</span>
                 </div>
                 <div className="flex-1 space-y-2 text-sm text-gray-300 w-full">
                   <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full bg-red-400 flex-shrink-0" />
-                    <span><strong className="text-red-300">Z &gt; +1.0</strong>: 평균보다 유의미하게 많이 출현한 번호 (과출현)</span>
+                    <span><strong className="text-red-300">Z &gt; +1.0</strong>: 번호들 가운데 평균보다 많이 나온 편</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full bg-green-400 flex-shrink-0" />
-                    <span><strong className="text-green-300">-1.0 ~ +1.0</strong>: 평균 수준의 출현 빈도 (정상 범위)</span>
+                    <span><strong className="text-green-300">-1.0 ~ +1.0</strong>: 평균 수준</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full bg-blue-400 flex-shrink-0" />
-                    <span><strong className="text-blue-300">Z &lt; -1.0</strong>: 평균보다 유의미하게 적게 출현한 번호 (저출현)</span>
+                    <span><strong className="text-blue-300">Z &lt; -1.0</strong>: 번호들 가운데 평균보다 적게 나온 편</span>
                   </div>
                   <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500 break-words">
                     Z-Score = (해당 번호 출현 빈도 − 전체 평균 빈도) ÷ 표준편차 &nbsp;|&nbsp; 전체 1~45번 기준 계산
+                    <div className="mt-1.5 text-gray-600 break-keep">
+                      45개 번호끼리의 상대 위치일 뿐 통계적 유의성 검정이 아닙니다. 45개 중 약 1/3은 우연히도 |Z|&gt;1 입니다.
+                      {evidence ? ` 번호 균등성 검정(χ²) p=${evidence.uniformity.p.toFixed(2)} — 번호 간 출현 횟수 차이는 우연 범위입니다.` : ''}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -984,6 +936,9 @@ const App: React.FC = () => {
                 </div>
                 <div className="mt-3 pt-3 border-t border-gray-700 text-xs text-gray-500 break-words">
                   * 전체 회차(262회차~) 데이터 기준. 공을 클릭하면 해당 번호의 정밀 분석으로 이동합니다.
+                  <div className="mt-1.5 text-gray-600 break-keep">
+                    무작위로 함께 나올 기대는 {repeatAnalysis.coOccurrenceExpected.mean.toFixed(1)}회(±{repeatAnalysis.coOccurrenceExpected.sd.toFixed(1)})입니다. 순위 차이는 대부분 이 범위 안의 우연입니다.
+                  </div>
                 </div>
               </div>
             )}

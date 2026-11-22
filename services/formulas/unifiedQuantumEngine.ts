@@ -1,5 +1,5 @@
 import { LottoResult } from '../../types';
-import { Engine645 } from './engine645';
+import { Engine645, tieKey } from './engine645';
 import { quantumFlux645 } from './quantumFlux';
 import { neuralPattern645 } from './neuralPattern';
 import { quantumAnalysis645 } from './quantumAnalysis';
@@ -41,8 +41,9 @@ export const unifiedQuantumEngine645 = {
       scoredNumbers.push({ number: i, score: finalScores[i] });
     }
 
-    // 종합 점수 내림차순 정렬
-    scoredNumbers.sort((a, b) => b.score - a.score);
+    // 종합 점수 내림차순 정렬 — 동점은 번호 크기와 무관한 결정적 키로 해소(최신 회차 번호를 시드로 사용)
+    const seed = results[0]?.round ?? 0;
+    scoredNumbers.sort((a, b) => b.score - a.score || tieKey(seed, a.number) - tieKey(seed, b.number));
 
     // 상위 6개 번호 추출 후 오름차순 정렬
     const top6 = scoredNumbers.slice(0, 6).map(s => s.number).sort((a, b) => a - b);
